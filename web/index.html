@@ -32,6 +32,52 @@
   #copyright { color: #555; font-size: 11px; margin-top: 4px; }
   #copyright a { color: #7a94ab; text-decoration: none; }
   #copyright a:hover { text-decoration: underline; }
+
+  /* Virtual gamepad, shown only on touch devices. */
+  #touch { display: none; }
+  #touch button {
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: #bbb;
+    font: 14px/1 inherit;
+    padding: 0;
+  }
+  #touch button:active { background: rgba(255, 255, 255, 0.25); }
+  #dpad {
+    position: fixed;
+    left: max(3vw, env(safe-area-inset-left));
+    bottom: max(3vh, env(safe-area-inset-bottom));
+    display: grid;
+    grid-template: repeat(3, 54px) / repeat(3, 54px);
+    gap: 2px;
+  }
+  #dpad button { border-radius: 10px; font-size: 18px; }
+  #t-up { grid-area: 1 / 2; }
+  #t-left { grid-area: 2 / 1; }
+  #t-right { grid-area: 2 / 3; }
+  #t-down { grid-area: 3 / 2; }
+  #tbtns {
+    position: fixed;
+    right: max(3vw, env(safe-area-inset-right));
+    bottom: max(3vh, env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 12px;
+  }
+  #tbtns button { border-radius: 50%; }
+  #t-repeat { width: 48px; height: 48px; }
+  #t-cancel { width: 56px; height: 56px; }
+  #t-ok { width: 72px; height: 72px; font-size: 16px; }
+  @media (hover: none) and (pointer: coarse) {
+    #keys { display: none; }
+    #touch { display: block; }
+    body { justify-content: flex-start; padding-top: 2vh; }
+  }
 </style>
 </head>
 <body>
@@ -43,6 +89,19 @@
   <a href="https://github.com/madeye/Legend-of-Sword-and-Fairy" target="_blank" rel="noopener">GitHub 倉庫</a></div>
 <div id="copyright">《仙劍奇俠傳》版權歸大宇資訊股份有限公司所有，本頁面僅供技術研究與懷舊交流，禁止商業用途 ·
   引擎自 <a href="https://github.com/sdlpal/sdlpal" target="_blank" rel="noopener">SDLPAL</a> 移植（GPL-3.0）</div>
+<div id="touch">
+  <div id="dpad">
+    <button data-key="ArrowUp" id="t-up">▲</button>
+    <button data-key="ArrowLeft" id="t-left">◀</button>
+    <button data-key="ArrowRight" id="t-right">▶</button>
+    <button data-key="ArrowDown" id="t-down">▼</button>
+  </div>
+  <div id="tbtns">
+    <button data-key="KeyR" id="t-repeat">連擊</button>
+    <button data-key="Escape" id="t-cancel">取消</button>
+    <button data-key="Enter" id="t-ok">確認</button>
+  </div>
+</div>
 <!-- Injects COOP/COEP headers via a service worker on hosts that can't set
      response headers (e.g. GitHub Pages); no-op when already isolated. -->
 <script src="coi-serviceworker.js"></script>
