@@ -162,6 +162,9 @@ impl Engine {
             .chunk_decompressed(MAINMENU_BACKGROUND_FBPNUM)
         {
             self.screen.blit_fbp(&buf);
+            if let Ok(palette) = self.get_palette(0, false) {
+                self.enable_enhanced_opening_menu(palette);
+            }
             self.video_update();
         }
     }
@@ -221,6 +224,7 @@ impl Engine {
 
         self.play_music(0, false, 1.0);
         self.fade_out(1);
+        self.disable_enhanced_background();
 
         if selected == 0 {
             self.play_avi("3.avi");

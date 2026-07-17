@@ -120,6 +120,17 @@ impl Video {
     pub fn close_requested(&self) -> bool {
         false
     }
+
+    /// The 720p enhanced opening menu is a native-only presentation feature;
+    /// the web build presents the classic 320x200 frame.
+    pub fn enable_enhanced_opening_menu(
+        &mut self,
+        _baseline: Vec<u8>,
+        _target_palette: [PalColor; 256],
+    ) {
+    }
+
+    pub fn disable_enhanced_background(&mut self) {}
 }
 
 /// Store a saved game: update the in-worker `PAL_FILES` map so loads in this
