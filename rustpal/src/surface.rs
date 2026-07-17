@@ -142,6 +142,18 @@ impl Surface {
     }
 }
 
+/// Copy `rows` full 320-wide scanlines from `src` (starting at row `src_y`)
+/// into `dst` (starting at row `dst_y`). Out-of-range rows are clipped.
+pub fn copy_rows(src: &[u8], src_y: usize, dst: &mut Surface, dst_y: usize, rows: usize) {
+    for r in 0..rows {
+        let so = (src_y + r) * SCREEN_W;
+        let do_ = (dst_y + r) * SCREEN_W;
+        if so + SCREEN_W <= src.len() && do_ + SCREEN_W <= dst.pixels.len() {
+            dst.pixels[do_..do_ + SCREEN_W].copy_from_slice(&src[so..so + SCREEN_W]);
+        }
+    }
+}
+
 /// Darken a palette index (used for shadows). From PAL_CalcShadowColor.
 #[inline]
 pub fn calc_shadow_color(c: u8) -> u8 {

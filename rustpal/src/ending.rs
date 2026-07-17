@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::game_loop::Engine;
 use crate::input::{KEY_MENU, KEY_SEARCH};
-use crate::surface::{self, Surface, SCREEN_H, SCREEN_W};
+use crate::surface::{self, copy_rows, Surface, SCREEN_H, SCREEN_W};
 
 /// Local port of PAL_ApplyWave (scene.c) used by the ending helpers.
 /// XXX consolidate with scene.rs's version once the scene port lands.
@@ -338,17 +338,5 @@ impl Engine {
         }
         self.play_music(0, false, 6.0);
         self.fade_out(3);
-    }
-}
-
-/// Copy `rows` full scanlines from src (starting at src_y) to dst surface
-/// (starting at dst_y).
-fn copy_rows(src: &[u8], src_y: usize, dst: &mut Surface, dst_y: usize, rows: usize) {
-    for r in 0..rows {
-        let so = (src_y + r) * SCREEN_W;
-        let do_ = (dst_y + r) * SCREEN_W;
-        if so + SCREEN_W <= src.len() && do_ + SCREEN_W <= dst.pixels.len() {
-            dst.pixels[do_..do_ + SCREEN_W].copy_from_slice(&src[so..so + SCREEN_W]);
-        }
     }
 }

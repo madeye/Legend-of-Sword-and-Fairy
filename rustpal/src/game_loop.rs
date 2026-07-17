@@ -655,6 +655,229 @@ impl Engine {
         }
     }
 
+    // =======================================================================
+    // Boot flow (main.c / game.c).
+    // =======================================================================
+
+    /// PAL_TrademarkScreen.
+    pub fn trademark_screen(&mut self) {
+        self.set_palette(3, false);
+        self.rng_play(6, 0, -1, 25);
+        self.delay(1000);
+        self.fade_out(1);
+    }
+
+    /// PAL_SplashScreen: the scrolling title screen with cranes.
+    pub fn splash_screen(&mut self) {
+        // DOS chunk numbers (main.c).
+        const BITMAPNUM_SPLASH_UP: usize = 0x26;
+        const BITMAPNUM_SPLASH_DOWN: usize = 0x27;
+        const SPRITENUM_SPLASH_TITLE: usize = 0x47;
+        const SPRITENUM_SPLASH_CRANE: usize = 0x49;
+        const NUM_RIX_TITLE: i32 = 0x05;
+
+        let Ok(palette) = self.get_palette(1, false) else {
+            return;
+        };
+        let Ok(bitmap_up) = self
+            .globals
+            .files
+            .fbp
+            .chunk_decompressed(BITMAPNUM_SPLASH_UP)
+        else {
+            return;
+        };
+        let Ok(bitmap_down) = self
+            .globals
+            .files
+            .fbp
+            .chunk_decompressed(BITMAPNUM_SPLASH_DOWN)
+        else {
+            return;
+        };
+        let Ok(title_sprite) = self
+            .globals
+            .files
+            .mgo
+            .chunk_decompressed(SPRITENUM_SPLASH_TITLE)
+        else {
+            return;
+        };
+        let Ok(crane_sprite) = self
+            .globals
+            .files
+            .mgo
+            .chunk_decompressed(SPRITENUM_SPLASH_CRANE)
+        else {
+            return;
+        };
+
+        // The title RLE frame is mutated to animate its height (HACKHACK in
+        // the C code): copy it out so we can modify the height field.
+        let mut title: Vec<u8> = match crate::surface::sprite_frame(&title_sprite, 0) {
+            Some(f) => f.to_vec(),
+            None => return,
+        };
+        // Height field offset: after the optional 0x00000002 header.
+        let title_h_off = if title.len() >= 4 && title[0] == 0x02 && title[1] == 0 && title[2] == 0
+        {
+            6
+        } else {
+            2
+        };
+        let title_height = crate::surface::rle_height(&title);
+        title[title_h_off] = 0;
+        title[title_h_off + 1] = 0;
+
+        // Generate the positions of the cranes.
+        let mut cranepos = [[0i32; 3]; 9];
+        for pos in cranepos.iter_mut() {
+            pos[0] = crate::global::random_long(300, 600);
+            pos[1] = crate::global::random_long(0, 80);
+            pos[2] = crate::global::random_long(0, 8);
+        }
+
+        self.play_music(NUM_RIX_TITLE, true, 2.0);
+
+        self.process_event();
+        self.input.clear_key_state();
+
+        let begin_time = self.ticks();
+        let mut img_pos = 200usize;
+        let mut crane_frame = 0u32;
+        let crane_count = crate::surface::sprite_frame_count(&crane_sprite).max(1);
+
+        loop {
+            self.process_event();
+            if self.quit_requested {
+                return;
+            }
+            let mut time = self.ticks() - begin_time;
+
+            // Fade the palette in over 15 seconds.
+            if time < 15000 {
+                let mut pal = [[0u8; 3]; 256];
+                for i in 0..256 {
+                    for c in 0..3 {
+                        pal[i][c] = (palette[i][c] as f32 * (time as f32 / 15000.0)) as u8;
+                    }
+                }
+                self.palette = pal;
+            } else {
+                self.palette = palette;
+            }
+
+            if img_pos > 1 {
+                img_pos -= 1;
+            }
+
+            // Upper part scrolling up, lower part scrolling in from below.
+            crate::surface::copy_rows(&bitmap_up, img_pos, &mut self.screen, 0, 200 - img_pos);
+            crate::surface::copy_rows(&bitmap_down, 0, &mut self.screen, 200 - img_pos, img_pos);
+
+            // The cranes.
+            for pos in cranepos.iter_mut() {
+                pos[2] = (pos[2] + (crane_frame & 1) as i32) % crane_count.min(8) as i32;
+                if img_pos > 1 && (img_pos & 1) != 0 {
+                    pos[1] += 1;
+                }
+                if let Some(f) = crate::surface::sprite_frame(&crane_sprite, pos[2] as usize) {
+                    self.screen.blit_rle(f, pos[0], pos[1]);
+                }
+                pos[0] -= 1;
+            }
+            crane_frame += 1;
+
+            // The title, growing taller each frame.
+            if crate::surface::rle_height(&title) < title_height {
+                let w = (title[title_h_off] as u16 | ((title[title_h_off + 1] as u16) << 8)) + 1;
+                title[title_h_off] = (w & 0xff) as u8;
+                title[title_h_off + 1] = (w >> 8) as u8;
+            }
+            self.screen.blit_rle(&title, 255, 10);
+            self.video_update();
+
+            // Key press: complete the fade and leave.
+            if self
+                .input
+                .pressed(crate::input::KEY_MENU | crate::input::KEY_SEARCH)
+            {
+                title[title_h_off] = (title_height & 0xff) as u8;
+                title[title_h_off + 1] = (title_height >> 8) as u8;
+                self.screen.blit_rle(&title, 255, 10);
+                self.video_update();
+
+                if time < 15000 {
+                    while time < 15000 {
+                        let mut pal = [[0u8; 3]; 256];
+                        for i in 0..256 {
+                            for c in 0..3 {
+                                pal[i][c] = (palette[i][c] as f32 * (time as f32 / 15000.0)) as u8;
+                            }
+                        }
+                        self.set_raw_palette(pal);
+                        self.delay(8);
+                        time += 250;
+                    }
+                    self.delay(500);
+                }
+                break;
+            }
+
+            let deadline = begin_time + time + 85;
+            self.delay_until(deadline);
+        }
+
+        self.play_music(0, false, 1.0);
+        self.fade_out(1);
+    }
+
+    /// PAL_GameMain: opening menu, then the main frame loop.
+    pub fn game_main(&mut self) {
+        let slot = self.opening_menu();
+        self.globals.current_save_slot = slot as u8;
+        self.globals.in_main_game = true;
+
+        self.globals.reload_in_next_tick(slot);
+
+        let mut time = self.ticks();
+        loop {
+            // Load the game resources if needed.
+            match self.res.load_resources(&mut self.globals) {
+                Ok(flags) => {
+                    if flags.global_data {
+                        self.update_equipments();
+                        let music = self.globals.num_music as i32;
+                        self.play_music(music, true, 1.0);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("failed to load resources: {e}");
+                    return;
+                }
+            }
+
+            self.input.clear_key_state();
+            self.delay_until(time);
+            time = self.ticks() + FRAME_TIME;
+
+            self.start_frame();
+            if self.quit_requested {
+                return;
+            }
+        }
+    }
+
+    /// The full boot sequence (main.c main()).
+    pub fn run(&mut self) {
+        self.trademark_screen();
+        self.splash_screen();
+        if self.quit_requested {
+            return;
+        }
+        self.game_main();
+    }
+
     /// VIDEO_FadeScreen: blend from backup buffer to current screen with the
     /// nibble-stepping pattern of the C code.
     pub fn fade_screen(&mut self, speed: u16) {

@@ -33,5 +33,11 @@ mod voc;
 mod yj;
 
 fn main() {
-    println!("rustpal: engine bring-up in progress");
+    match game_loop::Engine::new(false) {
+        Ok(mut engine) => engine.run(),
+        Err(e) => {
+            eprintln!("rustpal: failed to start: {e}");
+            std::process::exit(1);
+        }
+    }
 }
