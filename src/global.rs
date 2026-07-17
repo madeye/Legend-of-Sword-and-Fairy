@@ -1150,17 +1150,13 @@ impl Globals {
 
     /// PAL_LoadGame (DOS format).
     pub fn load_game(&mut self, slot: i32) -> io::Result<()> {
-        // No filesystem on the web: every load fails -> new game.
+        // On the web the save lives in the PAL_FILES map (seeded from
+        // localStorage by web/main.js) instead of the filesystem.
         #[cfg(target_arch = "wasm32")]
-        {
-            let _ = slot;
-            Err(io::Error::new(io::ErrorKind::NotFound, "no saves on web"))
-        }
+        let buf = self.data_dir.read_file(&format!("{slot}.rpg"))?;
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let buf = std::fs::read(self.save_file_path(slot))?;
-            self.load_game_from_bytes(&buf)
-        }
+        let buf = std::fs::read(self.save_file_path(slot))?;
+        self.load_game_from_bytes(&buf)
     }
 
     pub fn load_game_from_bytes(&mut self, buf: &[u8]) -> io::Result<()> {
@@ -1262,10 +1258,11 @@ impl Globals {
     /// PAL_SaveGame (DOS format).
     pub fn save_game(&self, slot: i32, saved_times: u16) -> io::Result<()> {
         let buf = self.save_game_to_bytes(saved_times);
-        // No filesystem on the web: saving silently does nothing (PoC).
+        // On the web: update the in-worker PAL_FILES map (so loads in this
+        // session see it) and post it to the main thread for localStorage.
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (slot, buf);
+            crate::web::store_save(slot, &buf);
             Ok(())
         }
         #[cfg(not(target_arch = "wasm32"))]

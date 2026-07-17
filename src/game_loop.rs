@@ -343,6 +343,11 @@ impl Engine {
                 self.quit_requested = true;
             }
         }
+        // Keep the web audio ring topped up (no-op natively: cpal renders
+        // in its own callback thread).
+        if let Some(audio) = self.audio.as_ref() {
+            audio.pump();
+        }
         let now = self.ticks();
         self.input.update_keyboard_state(now);
     }

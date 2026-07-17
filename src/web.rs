@@ -77,19 +77,21 @@ impl Video {
     }
 
     /// Drain key events written by the main thread since the last pump.
+    /// Ring layout: [0] = write counter (main thread), [1] = read counter
+    /// (mirrored here for debugging), [2..] = event slots.
     pub fn pump(&mut self) -> Vec<(KeyCode, bool)> {
         let mut out = Vec::new();
-        let capacity = self.input.length().saturating_sub(1);
+        let capacity = self.input.length().saturating_sub(2);
         if capacity == 0 {
             return out;
         }
         let write = Atomics::load(&self.input, 0).unwrap_or(0) as u32;
         // If we fell behind by more than the ring size, skip lost events.
         if write.wrapping_sub(self.read_seq) > capacity {
-            self.read_seq = write - capacity;
+            self.read_seq = write.wrapping_sub(capacity);
         }
         while self.read_seq != write {
-            let slot = 1 + (self.read_seq % capacity);
+            let slot = 2 + (self.read_seq % capacity);
             let v = Atomics::load(&self.input, slot).unwrap_or(0);
             let pressed = v & 1 != 0;
             if let Some(&code) = WEB_KEYS.get((v >> 1) as usize) {
@@ -97,6 +99,7 @@ impl Video {
             }
             self.read_seq = self.read_seq.wrapping_add(1);
         }
+        let _ = Atomics::store(&self.input, 1, self.read_seq as i32);
         out
     }
 
@@ -117,6 +120,20 @@ impl Video {
     pub fn close_requested(&self) -> bool {
         false
     }
+}
+
+/// Store a saved game: update the in-worker `PAL_FILES` map so loads in this
+/// session see it, and post it to the main thread, which persists it in
+/// localStorage (re-injected into PAL_FILES on the next boot).
+pub fn store_save(slot: i32, data: &[u8]) {
+    let arr = Uint8Array::from(data);
+    if let Ok(files) = js_sys::Reflect::get(&js_sys::global(), &"PAL_FILES".into()) {
+        let _ = js_sys::Reflect::set(&files, &format!("{slot}.RPG").into(), &arr);
+    }
+    let msg = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(&msg, &"palSave".into(), &JsValue::from(slot));
+    let _ = js_sys::Reflect::set(&msg, &"data".into(), &arr);
+    let _ = worker_scope().post_message(&msg);
 }
 
 thread_local! {

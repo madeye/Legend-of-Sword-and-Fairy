@@ -43,10 +43,48 @@ async function boot() {
     status.textContent = `loading game data… ${++loaded}/${FILES.length}`;
   }));
 
-  // Key-event ring buffer: [0] = write count, then RING_CAPACITY slots.
-  const inputSab = new SharedArrayBuffer(4 * (1 + RING_CAPACITY));
+  // Seed saved games (slots 1-5) from localStorage into the file map.
+  for (let slot = 1; slot <= 5; slot++) {
+    const b64 = localStorage.getItem(`pal-save-${slot}`);
+    if (!b64) continue;
+    const bin = atob(b64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    files[`${slot}.RPG`] = u8;
+  }
+
+  // Key-event ring buffer: [0] = write count, [1] = engine read count
+  // (debug), then RING_CAPACITY slots.
+  const inputSab = new SharedArrayBuffer(4 * (2 + RING_CAPACITY));
   const input = new Int32Array(inputSab);
   window.__palInput = input; // debug handle
+
+  // Audio: an AudioWorklet drains a sample ring the engine worker fills.
+  // 8-byte header (write/read counters) + 16384 stereo f32 frames.
+  let audioSab = null;
+  let audioRate = 44100;
+  let audioCtx = null;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioRate = audioCtx.sampleRate;
+    audioSab = new SharedArrayBuffer(8 + 16384 * 2 * 4);
+    await audioCtx.audioWorklet.addModule("worklet.js");
+    const node = new AudioWorkletNode(audioCtx, "pal-audio", {
+      outputChannelCount: [2],
+      processorOptions: { sab: audioSab },
+    });
+    node.connect(audioCtx.destination);
+    window.__palAudio = audioSab; // debug handle
+  } catch (e) {
+    console.warn("audio unavailable:", e);
+    audioSab = null;
+  }
+  // Browsers keep the context suspended until a user gesture.
+  const resumeAudio = () => {
+    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  };
+  window.addEventListener("keydown", resumeAudio);
+  window.addEventListener("click", resumeAudio);
 
   const worker = new Worker("worker.js");
   worker.onmessage = (e) => {
@@ -54,12 +92,20 @@ async function boot() {
       status.textContent = "";
       ctx.putImageData(
         new ImageData(new Uint8ClampedArray(e.data.buffer), 320, 200), 0, 0);
+    } else if (e.data && e.data.palSave !== undefined) {
+      // Persist a saved game posted by the engine.
+      const u8 = e.data.data;
+      let bin = "";
+      for (let i = 0; i < u8.length; i += 0x8000) {
+        bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+      }
+      localStorage.setItem(`pal-save-${e.data.palSave}`, btoa(bin));
     } else if (typeof e.data === "string") {
       status.textContent = e.data; // worker status/error text
     }
   };
   worker.onerror = (e) => { status.textContent = `worker error: ${e.message}`; };
-  worker.postMessage({ files, input: inputSab },
+  worker.postMessage({ files, input: inputSab, audio: audioSab, audioRate },
     Object.values(files).map((u8) => u8.buffer));
   status.textContent = "starting engine…";
 
@@ -67,7 +113,7 @@ async function boot() {
     const id = KEY_CODES.indexOf(KEY_ALIASES[code] ?? code);
     if (id < 0) return false;
     const seq = Atomics.load(input, 0);
-    Atomics.store(input, 1 + (seq % RING_CAPACITY), (id << 1) | (pressed ? 1 : 0));
+    Atomics.store(input, 2 + (seq % RING_CAPACITY), (id << 1) | (pressed ? 1 : 0));
     Atomics.store(input, 0, seq + 1);
     return true;
   };

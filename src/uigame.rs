@@ -140,10 +140,13 @@ impl Engine {
         }
     }
 
-    /// No save files on the web (PoC): every slot reads as empty.
+    /// Web: saves live in the PAL_FILES map, keyed like the DOS files.
     #[cfg(target_arch = "wasm32")]
-    fn get_saved_times(&self, _slot: i32) -> u16 {
-        0
+    fn get_saved_times(&self, slot: i32) -> u16 {
+        match self.globals.data_dir.read_file(&format!("{slot}.rpg")) {
+            Ok(buf) if buf.len() >= 2 => u16::from_le_bytes([buf[0], buf[1]]),
+            _ => 0,
+        }
     }
 
     // =======================================================================
