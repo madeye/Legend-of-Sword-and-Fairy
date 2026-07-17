@@ -1,3 +1,5 @@
 pal/WOR16.FON
 stderr.txt
 stdout.txt
+reference/
+rustpal/target/
