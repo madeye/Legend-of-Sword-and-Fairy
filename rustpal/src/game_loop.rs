@@ -212,6 +212,9 @@ pub struct Engine {
     /// Set when the user asked to quit (window close / Alt+F4).
     pub quit_requested: bool,
 
+    /// Ending effect sprite number (ending.c g_wCurEffectSprite).
+    pub ending_effect_sprite: u16,
+
     // Per-module state (owned by the respective module files).
     pub script: crate::script::ScriptState,
     pub ui: crate::ui::UiState,
@@ -255,6 +258,7 @@ impl Engine {
             video,
             start: Instant::now(),
             quit_requested: false,
+            ending_effect_sprite: 0,
             script: Default::default(),
             ui: Default::default(),
             scene: Default::default(),
