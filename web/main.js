@@ -79,6 +79,9 @@ async function boot() {
   let audioRate = 44100;
   let audioCtx = null;
   try {
+    // iOS 17+: without a "playback" audio session, the ringer/silent switch
+    // mutes Web Audio entirely even when the context is running.
+    if (navigator.audioSession) navigator.audioSession.type = "playback";
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     audioRate = audioCtx.sampleRate;
     audioSab = new SharedArrayBuffer(8 + 16384 * 2 * 4);
@@ -102,7 +105,14 @@ async function boot() {
     soundHint.hidden = !audioCtx || audioCtx.state === "running";
   };
   const resumeAudio = () => {
-    if (audioCtx && audioCtx.state !== "running") audioCtx.resume();
+    if (!audioCtx || audioCtx.state === "running") return;
+    audioCtx.resume();
+    // WebKit needs an actual (silent) buffer played from within the gesture
+    // to unlock the output path on some iOS versions.
+    const src = audioCtx.createBufferSource();
+    src.buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+    src.connect(audioCtx.destination);
+    src.start(0);
   };
   if (audioCtx) {
     audioCtx.onstatechange = updateSoundHint;
