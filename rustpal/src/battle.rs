@@ -1256,6 +1256,40 @@ impl Engine {
         result
     }
 
+    /// Headless verification helper: set up a battle against `enemy_team`
+    /// exactly like the pre-loop part of PAL_StartBattle and return the
+    /// composed battle scene (background + enemies + players), without
+    /// running the battle. Returns None if the team has no enemies.
+    pub fn compose_battle_scene(&mut self, enemy_team: u16, is_boss: bool) -> Option<Surface> {
+        let mut battle = Box::new(Battle::new());
+        battle.instant = true;
+        let b = &mut *battle;
+
+        let mut i = 0usize;
+        for j in 0..MAX_ENEMIES_IN_TEAM {
+            let w = self.globals.game.enemy_teams[enemy_team as usize].enemy[j];
+            if w == 0xFFFF || w == 0 {
+                continue;
+            }
+            let enemy_id = self.globals.game.objects[w as usize].enemy_id() as usize;
+            b.enemy[i].e = self.globals.game.enemies[enemy_id];
+            b.enemy[i].state = FighterState::Wait;
+            b.enemy[i].object_id = w;
+            i += 1;
+        }
+        if i == 0 {
+            return None;
+        }
+        b.max_enemy_index = i as u16 - 1;
+        b.is_boss = is_boss;
+
+        load_battle_sprites(self, b).ok()?;
+        load_battle_background(self, b).ok()?;
+        b.scene_buf = Surface::screen();
+        make_scene(self, b);
+        Some(std::mem::replace(&mut b.scene_buf, Surface::new(1, 1)))
+    }
+
     /// Run a trigger script with the live `battle` visible to battle opcodes.
     ///
     /// The internal battle routines hold the battle as a plain `&mut Battle`
