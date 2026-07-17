@@ -16,14 +16,14 @@ const WORD_LENGTH: i32 = 10;
 
 /// Item-menu context (itemmenu.c file statics g_iNumInventory / g_wItemFlags /
 /// g_fNoDesc), owned locally so the menu is re-entrant.
-struct ItemMenuCtx {
+pub(crate) struct ItemMenuCtx {
     num_inventory: i32,
     item_flags: u16,
 }
 
 impl Engine {
     /// PAL_ItemSelectMenuInit.
-    fn item_select_menu_init(&mut self, item_flags: u16) -> ItemMenuCtx {
+    pub(crate) fn item_select_menu_init(&mut self, item_flags: u16) -> ItemMenuCtx {
         self.globals.compress_inventory();
 
         // Count items currently in the inventory.
@@ -59,7 +59,7 @@ impl Engine {
 
     /// PAL_ItemSelectMenuUpdate: draw one frame, returning the selected
     /// object ID (0 = cancelled, 0xFFFF = not yet confirmed).
-    fn item_select_menu_update(&mut self, ctx: &ItemMenuCtx) -> u16 {
+    pub(crate) fn item_select_menu_update(&mut self, ctx: &ItemMenuCtx) -> u16 {
         use crate::input::{
             KEY_DOWN, KEY_END, KEY_HOME, KEY_LEFT, KEY_MENU, KEY_PGDN, KEY_PGUP, KEY_RIGHT,
             KEY_SEARCH, KEY_UP,

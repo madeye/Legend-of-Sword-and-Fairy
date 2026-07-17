@@ -215,6 +215,19 @@ pub struct Engine {
     /// Ending effect sprite number (ending.c g_wCurEffectSprite).
     pub ending_effect_sprite: u16,
 
+    /// The transient battle state (`g_Battle`).  `Some` only while a battle is
+    /// running; `None` at all other times.  The battle port threads this as an
+    /// explicit `&mut Battle` argument internally, but it is homed here so that
+    /// script opcodes running *during* a battle (enemy turn scripts, etc.) can
+    /// reach the live battle — see `Engine::run_trigger_script_in_battle`.
+    pub battle: Option<Box<crate::battle::Battle>>,
+
+    /// Headless acceleration: when set, every battle (including those started
+    /// from a script opcode, which cannot pass the flag explicitly) runs with
+    /// the `instant` fast path — all game logic runs, rendering/waiting is
+    /// skipped.  Off in normal play; tests set it to fight real battles fast.
+    pub battle_instant: bool,
+
     // Per-module state (owned by the respective module files).
     pub script: crate::script::ScriptState,
     pub ui: crate::ui::UiState,
@@ -259,6 +272,8 @@ impl Engine {
             start: Instant::now(),
             quit_requested: false,
             ending_effect_sprite: 0,
+            battle: None,
+            battle_instant: false,
             script: Default::default(),
             ui: Default::default(),
             scene: Default::default(),

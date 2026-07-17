@@ -123,25 +123,12 @@ fn xy_off(pos: (i32, i32), dx: i32, dy: i32) -> (i32, i32) {
 
 impl Engine {
     // =======================================================================
-    // Cross-module local stubs (owners noted; wire on merge).
+    // Small local helpers.
     // =======================================================================
 
-    /// PAL_PlayerInfoBox (uibattle.c). XXX cross-module stub, wire on merge.
-    pub(crate) fn player_info_box(
-        &mut self,
-        _pos: (i32, i32),
-        _player_role: u16,
-        _time_meter: i32,
-        _color: u8,
-        _update: bool,
-    ) {
-        // Drawn by uibattle.rs once ported.
-    }
-
-    /// PAL_PlayAVI (aviplay.c). XXX cross-module stub, wire on merge.
-    fn play_avi(&mut self, _filename: &str) {
-        // No-op: FMV playback lives in aviplay.rs once ported.
-    }
+    /// PAL_PlayAVI (aviplay.c).  FMV playback is out of scope for this engine
+    /// port; opening/closing videos is a no-op so the calling flows proceed.
+    fn play_avi(&mut self, _filename: &str) {}
 
     /// Read the "saved times" counter from a save slot file (GetSavedTimes).
     fn get_saved_times(&self, slot: i32) -> u16 {
@@ -599,7 +586,14 @@ impl Engine {
             let mut y = 45;
             for i in 0..=self.globals.max_party_member_index as usize {
                 let role = self.globals.party[i].player_role;
-                self.player_info_box((y, 165), role, 100, TIMEMETER_COLOR_DEFAULT, true);
+                crate::uibattle::player_info_box(
+                    self,
+                    (y, 165),
+                    role as usize,
+                    100,
+                    TIMEMETER_COLOR_DEFAULT,
+                    true,
+                );
                 y += 78;
             }
 
@@ -672,7 +666,14 @@ impl Engine {
             let mut y = 45;
             for i in 0..=self.globals.max_party_member_index as usize {
                 let role = self.globals.party[i].player_role;
-                self.player_info_box((y, 165), role, 100, TIMEMETER_COLOR_DEFAULT, true);
+                crate::uibattle::player_info_box(
+                    self,
+                    (y, 165),
+                    role as usize,
+                    100,
+                    TIMEMETER_COLOR_DEFAULT,
+                    true,
+                );
                 y += 78;
             }
 
@@ -702,7 +703,14 @@ impl Engine {
             let mut y = 45;
             for i in 0..=self.globals.max_party_member_index as usize {
                 let role = self.globals.party[i].player_role;
-                self.player_info_box((y, 165), role, 100, TIMEMETER_COLOR_DEFAULT, true);
+                crate::uibattle::player_info_box(
+                    self,
+                    (y, 165),
+                    role as usize,
+                    100,
+                    TIMEMETER_COLOR_DEFAULT,
+                    true,
+                );
                 y += 78;
             }
 

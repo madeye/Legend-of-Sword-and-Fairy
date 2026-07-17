@@ -8,13 +8,30 @@
 //! `PAL_AddPoisonForPlayer`.
 #![allow(dead_code)] // used incrementally as engine bring-up proceeds
 
+use crate::battle::{Battle, BattleEnemy, BattleResult, FighterState};
 use crate::game_loop::{Engine, FRAME_TIME};
 use crate::global::{
-    random_long, Enemy, PlayerRoles, PoisonStatus, BODYPART_EXTRA, DIR_EAST, DIR_NORTH, DIR_SOUTH,
+    random_long, PlayerRoles, PoisonStatus, BODYPART_EXTRA, DIR_EAST, DIR_NORTH, DIR_SOUTH,
     DIR_WEST, LOAD_PLAYER_SPRITE, LOAD_SCENE, MAX_ENEMIES_IN_TEAM, MAX_INVENTORY,
-    MAX_PLAYABLE_PLAYER_ROLES, MAX_PLAYERS_IN_PARTY, MAX_PLAYER_EQUIPMENTS, MAX_PLAYER_ROLES,
-    MAX_POISONS, MAX_SCENES, STATUS_ALL, STATUS_CONFUSED, STATUS_PARALYZED, STATUS_SLEEP,
+    MAX_PLAYABLE_PLAYER_ROLES, MAX_PLAYER_EQUIPMENTS, MAX_PLAYER_ROLES, MAX_POISONS, MAX_SCENES,
+    STATUS_ALL, STATUS_CONFUSED, STATUS_PARALYZED, STATUS_SLEEP,
 };
+
+/// Run `$body` with the live battle moved out of `self.battle` into a local
+/// `Box<Battle>` named `$battle`, then moved back.  Taking the box frees
+/// `self` for arbitrary method/field access while the battle is a plain local,
+/// which is what the two-argument battle routines want.  When there is no
+/// battle (`self.battle` is `None`, i.e. the opcode ran outside a battle) the
+/// body is skipped entirely — a safe no-op, matching the C where these opcodes
+/// operate on a zeroed `g_Battle` with no observable effect.
+macro_rules! with_battle {
+    ($eng:tt, $battle:ident => $body:block) => {{
+        if let Some(mut $battle) = $eng.battle.take() {
+            $body
+            $eng.battle = Some($battle);
+        }
+    }};
+}
 
 // Dialog locations (text.h kDialog*).
 const DIALOG_UPPER: u8 = 0;
@@ -25,63 +42,9 @@ const DIALOG_CENTER_WINDOW: u8 = 3;
 // Trigger modes (kTriggerTouchNormal used by opcode 0x0081).
 const TRIGGER_TOUCH_NORMAL: u16 = 5;
 
-/// FIGHTERSTATE (battle.h). Only used by the (not-yet-live) battle opcodes.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum FighterState {
-    #[default]
-    Wait,
-    Com,
-    Act,
-}
-
-/// A single enemy fighter slot (subset of BATTLEENEMY that the scripts touch).
-///
-/// XXX cross-module stub: the real `BATTLEENEMY`/`BATTLE` live in the battle
-/// module (battle.c). Until that lands, the battle-only opcodes operate on
-/// this minimal mirror so the port is complete and compiles. Wire to the real
-/// battle state on merge.
-#[derive(Clone, Copy, Default, Debug)]
-pub struct BattleEnemy {
-    pub object_id: u16,
-    pub e: Enemy,
-    pub status: [u16; STATUS_ALL],
-    pub time_meter: f32,
-    pub poisons: [PoisonStatus; MAX_POISONS],
-    pub pos: (i32, i32),
-    pub pos_original: (i32, i32),
-    pub current_frame: u16,
-    pub state: FighterState,
-    pub color_shift: i32,
-    pub script_on_turn_start: u16,
-    pub script_on_battle_end: u16,
-    pub script_on_ready: u16,
-}
-
-/// A single player fighter slot (subset of BATTLEPLAYER). XXX cross-module
-/// stub — see `BattleEnemy`.
-#[derive(Clone, Copy, Default, Debug)]
-pub struct BattlePlayer {
-    pub color_shift: i32,
-    pub current_frame: u16,
-    pub time_meter: f32,
-}
-
-/// The subset of `g_Battle` that the scripts read/write. XXX cross-module
-/// stub — see `BattleEnemy`.
-#[derive(Clone, Copy, Default, Debug)]
-pub struct Battle {
-    pub player: [BattlePlayer; MAX_PLAYERS_IN_PARTY],
-    pub enemy: [BattleEnemy; MAX_ENEMIES_IN_TEAM],
-    pub max_enemy_index: u16,
-    pub is_boss: bool,
-    pub battle_result: u16,
-    pub enemy_moving: bool,
-    pub hiding_time: i32,
-    pub moving_player_index: u16,
-    pub blow: i32,
-}
-
-/// Module-private interpreter state (script.c statics + the `g_Battle` mirror).
+/// Module-private interpreter state (script.c statics).  The battle state
+/// itself lives in `Engine::battle` (see game_loop.rs); the battle opcodes
+/// reach it through the `with_battle!` macro.
 pub struct ScriptState {
     /// `g_fScriptSuccess`.
     pub script_success: bool,
@@ -91,8 +54,6 @@ pub struct ScriptState {
     pub last_event_object: u16,
     /// `g_fUpdatedInBattle` (HACKHACK extern).
     pub updated_in_battle: bool,
-    /// Battle state mirror (XXX cross-module stub, see `Battle`).
-    pub battle: Battle,
 }
 
 impl Default for ScriptState {
@@ -102,7 +63,6 @@ impl Default for ScriptState {
             cur_equip_part: -1,
             last_event_object: 0,
             updated_in_battle: false,
-            battle: Battle::default(),
         }
     }
 }
@@ -509,6 +469,9 @@ impl Engine {
 
     /// `PAL_InterpretInstruction`: execute one instruction; returns the next
     /// script address to run.
+    // The `with_battle!` macro always binds the battle `mut`; opcodes that only
+    // read it therefore trip `unused_mut` on the macro expansion.
+    #[allow(unused_mut)]
     fn interpret_instruction(&mut self, script_entry: u16, event_object_id: u16) -> u16 {
         let mut ws = script_entry;
         let script = self.globals.game.script_entries[ws as usize];
@@ -780,19 +743,19 @@ impl Engine {
             }
 
             // 0x0021: inflict damage to the enemy.
-            0x0021 => {
+            0x0021 => with_battle!(self, battle => {
                 if op[0] != 0 {
-                    for i in 0..=self.script.battle.max_enemy_index as usize {
-                        if self.script.battle.enemy[i].object_id != 0 {
-                            let h = &mut self.script.battle.enemy[i].e.health;
+                    for i in 0..=battle.max_enemy_index as usize {
+                        if battle.enemy[i].object_id != 0 {
+                            let h = &mut battle.enemy[i].e.health;
                             *h = h.wrapping_sub(op[1]);
                         }
                     }
                 } else {
-                    let h = &mut self.script.battle.enemy[event_object_id as usize].e.health;
+                    let h = &mut battle.enemy[event_object_id as usize].e.health;
                     *h = h.wrapping_sub(op[1]);
                 }
-            }
+            }),
 
             // 0x0022: revive player.
             0x0022 => {
@@ -879,10 +842,10 @@ impl Engine {
             }
 
             // 0x0028: apply poison to enemy.
-            0x0028 => {
+            0x0028 => with_battle!(self, battle => {
                 if op[0] != 0 {
-                    for i in 0..=self.script.battle.max_enemy_index as usize {
-                        let w = self.script.battle.enemy[i].object_id;
+                    for i in 0..=battle.max_enemy_index as usize {
+                        let w = battle.enemy[i].object_id;
                         if w == 0 {
                             continue;
                         }
@@ -890,20 +853,20 @@ impl Engine {
                             >= self.globals.game.objects[w as usize].enemy_resistance_to_sorcery()
                                 as i32
                         {
-                            self.apply_poison_to_enemy(i, op[1], event_object_id);
+                            self.apply_poison_to_enemy(&mut battle, i, op[1], event_object_id);
                         }
                     }
                 } else {
                     let i = event_object_id as usize;
-                    let w = self.script.battle.enemy[i].object_id;
+                    let w = battle.enemy[i].object_id;
                     if random_long(0, 9)
                         >= self.globals.game.objects[w as usize].enemy_resistance_to_sorcery()
                             as i32
                     {
-                        self.apply_poison_to_enemy(i, op[1], event_object_id);
+                        self.apply_poison_to_enemy(&mut battle, i, op[1], event_object_id);
                     }
                 }
-            }
+            }),
 
             // 0x0029: apply poison to player.
             0x0029 => {
@@ -927,15 +890,15 @@ impl Engine {
             }
 
             // 0x002A: cure poison by object ID for enemy.
-            0x002A => {
+            0x002A => with_battle!(self, battle => {
                 if op[0] != 0 {
-                    for i in 0..=self.script.battle.max_enemy_index as usize {
-                        if self.script.battle.enemy[i].object_id == 0 {
+                    for i in 0..=battle.max_enemy_index as usize {
+                        if battle.enemy[i].object_id == 0 {
                             continue;
                         }
                         for j in 0..MAX_POISONS {
-                            if self.script.battle.enemy[i].poisons[j].poison_id == op[1] {
-                                self.script.battle.enemy[i].poisons[j] = PoisonStatus::default();
+                            if battle.enemy[i].poisons[j].poison_id == op[1] {
+                                battle.enemy[i].poisons[j] = PoisonStatus::default();
                                 break;
                             }
                         }
@@ -943,13 +906,13 @@ impl Engine {
                 } else {
                     let i = event_object_id as usize;
                     for j in 0..MAX_POISONS {
-                        if self.script.battle.enemy[i].poisons[j].poison_id == op[1] {
-                            self.script.battle.enemy[i].poisons[j] = PoisonStatus::default();
+                        if battle.enemy[i].poisons[j].poison_id == op[1] {
+                            battle.enemy[i].poisons[j] = PoisonStatus::default();
                             break;
                         }
                     }
                 }
-            }
+            }),
 
             // 0x002B: cure poison by object ID for player.
             0x002B => {
@@ -986,19 +949,18 @@ impl Engine {
             }
 
             // 0x002E: set the status for an enemy.
-            0x002E => {
-                let w = self.script.battle.enemy[event_object_id as usize].object_id;
+            0x002E => with_battle!(self, battle => {
+                let w = battle.enemy[event_object_id as usize].object_id;
                 // PAL_CLASSIC: i = 9.
                 let i = 9;
                 if random_long(0, i)
                     > self.globals.game.objects[w as usize].enemy_resistance_to_sorcery() as i32
                 {
-                    self.script.battle.enemy[event_object_id as usize].status[op[0] as usize] =
-                        op[1];
+                    battle.enemy[event_object_id as usize].status[op[0] as usize] = op[1];
                 } else {
                     ws = op[2].wrapping_sub(1);
                 }
-            }
+            }),
 
             // 0x002F: remove player's status.
             0x002F => {
@@ -1030,16 +992,14 @@ impl Engine {
             }
 
             // 0x0033: collect the enemy for items.
-            0x0033 => {
-                let cv = self.script.battle.enemy[event_object_id as usize]
-                    .e
-                    .collect_value;
+            0x0033 => with_battle!(self, battle => {
+                let cv = battle.enemy[event_object_id as usize].e.collect_value;
                 if cv != 0 {
                     self.globals.collect_value = self.globals.collect_value.wrapping_add(cv);
                 } else {
                     ws = op[0].wrapping_sub(1);
                 }
-            }
+            }),
 
             // 0x0034: transform collected enemies into items.
             0x0034 => {
@@ -1107,11 +1067,11 @@ impl Engine {
             }
 
             // 0x0039: drain HP from enemy.
-            0x0039 => {
-                let w = self.globals.party[self.script.battle.moving_player_index as usize]
+            0x0039 => with_battle!(self, battle => {
+                let w = self.globals.party[battle.moving_player_index as usize]
                     .player_role as usize;
                 {
-                    let h = &mut self.script.battle.enemy[event_object_id as usize].e.health;
+                    let h = &mut battle.enemy[event_object_id as usize].e.health;
                     *h = h.wrapping_sub(op[0]);
                 }
                 let pr = &mut self.globals.game.player_roles;
@@ -1119,16 +1079,16 @@ impl Engine {
                 if pr.hp[w] > pr.max_hp[w] {
                     pr.hp[w] = pr.max_hp[w];
                 }
-            }
+            }),
 
             // 0x003A: player flee from the battle.
-            0x003A => {
-                if self.script.battle.is_boss {
+            0x003A => with_battle!(self, battle => {
+                if battle.is_boss {
                     ws = op[0].wrapping_sub(1);
                 } else {
-                    self.battle_player_escape();
+                    crate::battle::player_escape(self, &mut battle);
                 }
-            }
+            }),
 
             // 0x003F: ride the event object to the position, at a low speed.
             0x003F => {
@@ -1154,13 +1114,13 @@ impl Engine {
             }
 
             // 0x0042: simulate a magic for a player.
-            0x0042 => {
+            0x0042 => with_battle!(self, battle => {
                 let mut i = op[2] as i16 as i32 - 1;
                 if i < 0 {
                     i = event_object_id as i32;
                 }
-                self.battle_simulate_magic(i, op[0], op[1]);
-            }
+                crate::fight::battle_simulate_magic(self, &mut battle, i as i16, op[0], op[1]);
+            }),
 
             // 0x0043: set background music.
             0x0043 => {
@@ -1361,19 +1321,19 @@ impl Engine {
             }
 
             // 0x005B: halve the enemy's HP.
-            0x005B => {
-                let mut w = self.script.battle.enemy[event_object_id as usize].e.health / 2 + 1;
+            0x005B => with_battle!(self, battle => {
+                let mut w = battle.enemy[event_object_id as usize].e.health / 2 + 1;
                 if w > op[0] {
                     w = op[0];
                 }
-                let h = &mut self.script.battle.enemy[event_object_id as usize].e.health;
+                let h = &mut battle.enemy[event_object_id as usize].e.health;
                 *h = h.wrapping_sub(w);
-            }
+            }),
 
             // 0x005C: hide for a while.
-            0x005C => {
-                self.script.battle.hiding_time = -(op[0] as i32);
-            }
+            0x005C => with_battle!(self, battle => {
+                battle.hiding_time = -(op[0] as i32);
+            }),
 
             // 0x005D: jump if player doesn't have the specified poison.
             0x005D => {
@@ -1386,12 +1346,10 @@ impl Engine {
             }
 
             // 0x005E: jump if enemy doesn't have the specified poison.
-            0x005E => {
+            0x005E => with_battle!(self, battle => {
                 let mut found = false;
                 for i in 0..MAX_POISONS {
-                    if self.script.battle.enemy[event_object_id as usize].poisons[i].poison_id
-                        == op[0]
-                    {
+                    if battle.enemy[event_object_id as usize].poisons[i].poison_id == op[0] {
                         found = true;
                         break;
                     }
@@ -1399,7 +1357,7 @@ impl Engine {
                 if !found {
                     ws = op[1].wrapping_sub(1);
                 }
-            }
+            }),
 
             // 0x005F: kill the player immediately.
             0x005F => {
@@ -1407,9 +1365,9 @@ impl Engine {
             }
 
             // 0x0060: immediate KO of the enemy.
-            0x0060 => {
-                self.script.battle.enemy[event_object_id as usize].e.health = 0;
-            }
+            0x0060 => with_battle!(self, battle => {
+                battle.enemy[event_object_id as usize].e.health = 0;
+            }),
 
             // 0x0061: jump if player is not poisoned.
             0x0061 => {
@@ -1431,15 +1389,15 @@ impl Engine {
             }
 
             // 0x0064: jump if enemy's HP is above the specified percentage.
-            0x0064 => {
-                let obj = self.script.battle.enemy[event_object_id as usize].object_id;
+            0x0064 => with_battle!(self, battle => {
+                let obj = battle.enemy[event_object_id as usize].object_id;
                 let enemy_id = self.globals.game.objects[obj as usize].enemy_id() as usize;
-                let cur = self.script.battle.enemy[event_object_id as usize].e.health as i32;
+                let cur = battle.enemy[event_object_id as usize].e.health as i32;
                 let base = self.globals.game.enemies[enemy_id].health as i32;
                 if cur * 100 > base * op[0] as i32 {
                     ws = op[1].wrapping_sub(1);
                 }
-            }
+            }),
 
             // 0x0065: set the player's sprite.
             0x0065 => {
@@ -1451,45 +1409,51 @@ impl Engine {
             }
 
             // 0x0066: throw weapon to enemy.
-            0x0066 => {
+            0x0066 => with_battle!(self, battle => {
                 let mut w = op[1].wrapping_mul(5);
-                let role = self.globals.party[self.script.battle.moving_player_index as usize]
+                let role = self.globals.party[battle.moving_player_index as usize]
                     .player_role as usize;
                 w = w.wrapping_add(
                     self.globals.game.player_roles.attack_strength[role]
                         .wrapping_mul(random_long(0, 3) as u16),
                 );
-                self.battle_simulate_magic(event_object_id as i16 as i32, op[0], w);
-            }
+                crate::fight::battle_simulate_magic(
+                    self,
+                    &mut battle,
+                    event_object_id as i16,
+                    op[0],
+                    w,
+                );
+            }),
 
             // 0x0067: enemy use magic.
-            0x0067 => {
-                let e = &mut self.script.battle.enemy[event_object_id as usize];
+            0x0067 => with_battle!(self, battle => {
+                let e = &mut battle.enemy[event_object_id as usize];
                 e.e.magic = op[0];
                 e.e.magic_rate = if op[1] == 0 { 10 } else { op[1] };
-            }
+            }),
 
             // 0x0068: jump if it's the enemy's turn.
-            0x0068 => {
-                if self.script.battle.enemy_moving {
+            0x0068 => with_battle!(self, battle => {
+                if battle.enemy_moving {
                     ws = op[0].wrapping_sub(1);
                 }
-            }
+            }),
 
             // 0x0069: enemy escape in battle.
-            0x0069 => {
-                self.battle_enemy_escape();
-            }
+            0x0069 => with_battle!(self, battle => {
+                crate::battle::enemy_escape(self, &mut battle);
+            }),
 
             // 0x006A: steal from the enemy.
-            0x006A => {
-                self.battle_steal_from_enemy(event_object_id, op[0]);
-            }
+            0x006A => with_battle!(self, battle => {
+                crate::fight::battle_steal_from_enemy(self, &mut battle, event_object_id, op[0]);
+            }),
 
             // 0x006B: blow away enemies.
-            0x006B => {
-                self.script.battle.blow = op[0] as i16 as i32;
-            }
+            0x006B => with_battle!(self, battle => {
+                battle.blow = op[0] as i16 as i32;
+            }),
 
             // 0x006C: walk the NPC in one step.
             0x006C => {
@@ -1759,9 +1723,9 @@ impl Engine {
             }
 
             // 0x0089: set the battle result.
-            0x0089 => {
-                self.script.battle.battle_result = op[0];
-            }
+            0x0089 => with_battle!(self, battle => {
+                battle.battle_result = BattleResult::from_u16(op[0]);
+            }),
 
             // 0x008A: enable auto-battle for the next battle.
             0x008A => {
@@ -1799,43 +1763,41 @@ impl Engine {
             }
 
             // 0x0091: jump if the enemy is not first of the same kind.
-            0x0091 => {
+            0x0091 => with_battle!(self, battle => {
+                // Reached only during battle (`self.globals.in_battle`), which
+                // is exactly when `self.battle` is `Some`.
                 let mut self_pos = 0;
                 let mut count = 0;
-                if self.globals.in_battle {
-                    let target = self.script.battle.enemy[event_object_id as usize].object_id;
-                    for i in 0..=self.script.battle.max_enemy_index as usize {
-                        if self.script.battle.enemy[i].object_id == target {
-                            count += 1;
-                            if i == event_object_id as usize {
-                                self_pos = count;
-                            }
+                let target = battle.enemy[event_object_id as usize].object_id;
+                for i in 0..=battle.max_enemy_index as usize {
+                    if battle.enemy[i].object_id == target {
+                        count += 1;
+                        if i == event_object_id as usize {
+                            self_pos = count;
                         }
                     }
                 }
                 if self_pos > 1 {
                     ws = op[0].wrapping_sub(1);
                 }
-            }
+            }),
 
             // 0x0092: show a magic-casting animation for a player in battle.
-            0x0092 => {
-                if self.globals.in_battle {
-                    if op[0] != 0 {
-                        self.battle_show_player_pre_magic_anim((op[0] - 1) as usize, false);
-                        self.script.battle.player[(op[0] - 1) as usize].current_frame = 6;
-                    }
-                    for i in 0..5 {
-                        for j in 0..=self.globals.max_party_member_index as usize {
-                            self.script.battle.player[j].color_shift = i * 2;
-                        }
-                        self.battle_delay(1, 0, true);
-                    }
-                    self.battle_update_fighters();
-                    self.battle_make_scene();
-                    self.battle_fade_scene();
+            0x0092 => with_battle!(self, battle => {
+                if op[0] != 0 {
+                    crate::fight::show_player_pre_magic_anim(self, &mut battle, (op[0] - 1) as usize, false);
+                    battle.player[(op[0] - 1) as usize].current_frame = 6;
                 }
-            }
+                for i in 0..5 {
+                    for j in 0..=self.globals.max_party_member_index as usize {
+                        battle.player[j].color_shift = i * 2;
+                    }
+                    crate::fight::battle_delay(self, &mut battle, 1, 0, true);
+                }
+                crate::fight::battle_update_fighters(self, &mut battle);
+                crate::battle::make_scene(self, &mut battle);
+                crate::battle::fade_scene(self, &mut battle);
+            }),
 
             // 0x0093: fade the screen, updating the scene during the process.
             0x0093 => {
@@ -1933,19 +1895,19 @@ impl Engine {
             }
 
             // 0x009C: enemy division.
-            0x009C => {
-                ws = self.op_enemy_division(ws, op, event_object_id, cur_event_object_id);
-            }
+            0x009C => with_battle!(self, battle => {
+                ws = self.op_enemy_division(&mut battle, ws, op, event_object_id, cur_event_object_id);
+            }),
 
             // 0x009E: enemy summons another monster.
-            0x009E => {
-                ws = self.op_enemy_summon(ws, op, event_object_id);
-            }
+            0x009E => with_battle!(self, battle => {
+                ws = self.op_enemy_summon(&mut battle, ws, op, event_object_id);
+            }),
 
             // 0x009F: enemy transforms into something else.
-            0x009F => {
-                self.op_enemy_transform(op, event_object_id);
-            }
+            0x009F => with_battle!(self, battle => {
+                self.op_enemy_transform(&mut battle, op, event_object_id);
+            }),
 
             // 0x00A0: quit game.
             0x00A0 => {
@@ -2016,22 +1978,30 @@ impl Engine {
     // ---- opcode helpers that are large enough to warrant their own fn ----
 
     /// Apply a single poison to enemy slot `i` (helper for opcode 0x0028).
-    fn apply_poison_to_enemy(&mut self, i: usize, poison_id: u16, event_object_id: u16) {
+    fn apply_poison_to_enemy(
+        &mut self,
+        battle: &mut Battle,
+        i: usize,
+        poison_id: u16,
+        event_object_id: u16,
+    ) {
         let mut j = MAX_POISONS;
         for k in 0..MAX_POISONS {
-            if self.script.battle.enemy[i].poisons[k].poison_id == poison_id {
+            if battle.enemy[i].poisons[k].poison_id == poison_id {
                 j = k;
                 break;
             }
         }
         if j >= MAX_POISONS {
             for k in 0..MAX_POISONS {
-                if self.script.battle.enemy[i].poisons[k].poison_id == 0 {
+                if battle.enemy[i].poisons[k].poison_id == 0 {
                     let script =
                         self.globals.game.objects[poison_id as usize].poison_enemy_script();
-                    let result = self.run_trigger_script(script, event_object_id);
-                    self.script.battle.enemy[i].poisons[k].poison_id = poison_id;
-                    self.script.battle.enemy[i].poisons[k].poison_script = result;
+                    // The poison's on-apply script can itself touch the battle;
+                    // route it through the wrapper so it stays visible.
+                    let result = self.run_trigger_script_in_battle(battle, script, event_object_id);
+                    battle.enemy[i].poisons[k].poison_id = poison_id;
+                    battle.enemy[i].poisons[k].poison_script = result;
                     break;
                 }
             }
@@ -2197,23 +2167,19 @@ impl Engine {
     /// Opcode 0x009C: enemy division.
     fn op_enemy_division(
         &mut self,
+        battle: &mut Battle,
         mut ws: u16,
         op: [u16; 3],
         event_object_id: u16,
         cur_event_object_id: u16,
     ) -> u16 {
         let mut count = 0u16;
-        for i in 0..=self.script.battle.max_enemy_index as usize {
-            if self.script.battle.enemy[i].object_id != 0 {
+        for i in 0..=battle.max_enemy_index as usize {
+            if battle.enemy[i].object_id != 0 {
                 count += 1;
             }
         }
-        if count != 1
-            || self.script.battle.enemy[cur_event_object_id as usize]
-                .e
-                .health
-                <= 1
-        {
+        if count != 1 || battle.enemy[cur_event_object_id as usize].e.health <= 1 {
             if op[1] != 0 {
                 ws = op[1].wrapping_sub(1);
             }
@@ -2227,9 +2193,9 @@ impl Engine {
         let x = w + 1;
         let y = w;
 
-        let src = self.script.battle.enemy[event_object_id as usize];
+        let src = battle.enemy[event_object_id as usize].clone();
         for i in 0..MAX_ENEMIES_IN_TEAM {
-            if w > 0 && self.script.battle.enemy[i].object_id == 0 {
+            if w > 0 && battle.enemy[i].object_id == 0 {
                 w -= 1;
                 let mut e = BattleEnemy {
                     object_id: src.object_id,
@@ -2243,54 +2209,54 @@ impl Engine {
                     ..BattleEnemy::default()
                 };
                 e.e.health = (src.e.health + y) / x;
-                self.script.battle.enemy[i] = e;
+                battle.enemy[i] = e;
             }
         }
-        self.script.battle.enemy[cur_event_object_id as usize]
-            .e
-            .health = (src.e.health + y) / x;
+        battle.enemy[cur_event_object_id as usize].e.health = (src.e.health + y) / x;
 
         let mut max = 0;
         for i in 0..MAX_ENEMIES_IN_TEAM {
-            if self.script.battle.enemy[i].object_id != 0 {
+            if battle.enemy[i].object_id != 0 {
                 max = i;
             }
         }
-        self.script.battle.max_enemy_index = max as u16;
+        battle.max_enemy_index = max as u16;
 
-        self.load_battle_sprites();
-        for i in 0..=self.script.battle.max_enemy_index as usize {
-            if self.script.battle.enemy[i].object_id == 0 {
+        crate::battle::load_battle_sprites(self, battle).ok();
+        for i in 0..=battle.max_enemy_index as usize {
+            if battle.enemy[i].object_id == 0 {
                 continue;
             }
-            self.script.battle.enemy[i].pos = src.pos;
+            battle.enemy[i].pos = src.pos;
         }
         for _ in 0..10 {
-            for j in 0..=self.script.battle.max_enemy_index as usize {
-                let px2 = (self.script.battle.enemy[j].pos.0
-                    + self.script.battle.enemy[j].pos_original.0)
-                    / 2;
-                let py2 = (self.script.battle.enemy[j].pos.1
-                    + self.script.battle.enemy[j].pos_original.1)
-                    / 2;
-                self.script.battle.enemy[j].pos = (px2, py2);
+            for j in 0..=battle.max_enemy_index as usize {
+                let px2 = (battle.enemy[j].pos.0 + battle.enemy[j].pos_original.0) / 2;
+                let py2 = (battle.enemy[j].pos.1 + battle.enemy[j].pos_original.1) / 2;
+                battle.enemy[j].pos = (px2, py2);
             }
-            self.battle_delay(1, 0, true);
+            crate::fight::battle_delay(self, battle, 1, 0, true);
         }
-        self.battle_update_fighters();
-        self.battle_delay(1, 0, true);
+        crate::fight::battle_update_fighters(self, battle);
+        crate::fight::battle_delay(self, battle, 1, 0, true);
         ws
     }
 
     /// Opcode 0x009E: enemy summons another monster.
-    fn op_enemy_summon(&mut self, mut ws: u16, op: [u16; 3], event_object_id: u16) -> u16 {
+    fn op_enemy_summon(
+        &mut self,
+        battle: &mut Battle,
+        mut ws: u16,
+        op: [u16; 3],
+        event_object_id: u16,
+    ) -> u16 {
         let (magic_frames, idle_frames, act_wait) = {
-            let e = &self.script.battle.enemy[event_object_id as usize].e;
+            let e = &battle.enemy[event_object_id as usize].e;
             (e.magic_frames, e.idle_frames, e.act_wait_frames)
         };
         for i in 0..magic_frames {
-            self.script.battle.enemy[event_object_id as usize].current_frame = idle_frames + i;
-            self.battle_delay(act_wait, 0, false);
+            battle.enemy[event_object_id as usize].current_frame = idle_frames + i;
+            crate::fight::battle_delay(self, battle, act_wait, 0, false);
         }
 
         let mut x = 0i32;
@@ -2302,18 +2268,18 @@ impl Engine {
         };
 
         if w == 0 || w == 0xFFFF {
-            w = self.script.battle.enemy[event_object_id as usize].object_id;
+            w = battle.enemy[event_object_id as usize].object_id;
         }
 
-        for i in 0..=self.script.battle.max_enemy_index as usize {
-            if self.script.battle.enemy[i].object_id == 0 {
+        for i in 0..=battle.max_enemy_index as usize {
+            if battle.enemy[i].object_id == 0 {
                 x += 1;
             }
         }
 
-        let e = &self.script.battle.enemy[event_object_id as usize];
+        let e = &battle.enemy[event_object_id as usize];
         if x < y
-            || self.script.battle.hiding_time > 0
+            || battle.hiding_time > 0
             || e.status[STATUS_SLEEP] != 0
             || e.status[STATUS_PARALYZED] != 0
             || e.status[STATUS_CONFUSED] != 0
@@ -2323,10 +2289,10 @@ impl Engine {
             }
         } else {
             let enemy_id = self.globals.game.objects[w as usize].enemy_id() as usize;
-            for i in 0..=self.script.battle.max_enemy_index as usize {
-                if self.script.battle.enemy[i].object_id == 0 {
+            for i in 0..=battle.max_enemy_index as usize {
+                if battle.enemy[i].object_id == 0 {
                     let obj = &self.globals.game.objects[w as usize];
-                    self.script.battle.enemy[i] = BattleEnemy {
+                    battle.enemy[i] = BattleEnemy {
                         object_id: w,
                         e: self.globals.game.enemies[enemy_id],
                         state: FighterState::Wait,
@@ -2343,45 +2309,45 @@ impl Engine {
                     }
                 }
             }
-            self.load_battle_sprites();
-            self.battle_make_scene();
+            crate::battle::load_battle_sprites(self, battle).ok();
+            crate::battle::make_scene(self, battle);
             self.play_sound(212);
-            self.battle_fade_scene();
-            self.battle_delay(2, 0, true);
-            for i in 0..=self.script.battle.max_enemy_index as usize {
-                self.script.battle.enemy[i].color_shift = 0;
+            crate::battle::fade_scene(self, battle);
+            crate::fight::battle_delay(self, battle, 2, 0, true);
+            for i in 0..=battle.max_enemy_index as usize {
+                battle.enemy[i].color_shift = 0;
             }
-            self.battle_make_scene();
-            self.battle_fade_scene();
+            crate::battle::make_scene(self, battle);
+            crate::battle::fade_scene(self, battle);
         }
         ws
     }
 
     /// Opcode 0x009F: enemy transforms into something else.
-    fn op_enemy_transform(&mut self, op: [u16; 3], event_object_id: u16) {
-        let e = &self.script.battle.enemy[event_object_id as usize];
-        if self.script.battle.hiding_time <= 0
+    fn op_enemy_transform(&mut self, battle: &mut Battle, op: [u16; 3], event_object_id: u16) {
+        let e = &battle.enemy[event_object_id as usize];
+        if battle.hiding_time <= 0
             && e.status[STATUS_SLEEP] == 0
             && e.status[STATUS_PARALYZED] == 0
             && e.status[STATUS_CONFUSED] == 0
         {
-            let health = self.script.battle.enemy[event_object_id as usize].e.health;
+            let health = battle.enemy[event_object_id as usize].e.health;
             let enemy_id = self.globals.game.objects[op[0] as usize].enemy_id() as usize;
-            let slot = &mut self.script.battle.enemy[event_object_id as usize];
+            let slot = &mut battle.enemy[event_object_id as usize];
             slot.object_id = op[0];
             slot.e = self.globals.game.enemies[enemy_id];
             slot.e.health = health;
             slot.current_frame = 0;
 
             for i in 0..6 {
-                self.script.battle.enemy[event_object_id as usize].color_shift = i;
-                self.battle_delay(1, 0, false);
+                battle.enemy[event_object_id as usize].color_shift = i;
+                crate::fight::battle_delay(self, battle, 1, 0, false);
             }
-            self.script.battle.enemy[event_object_id as usize].color_shift = 0;
+            battle.enemy[event_object_id as usize].color_shift = 0;
             self.play_sound(47);
-            self.load_battle_sprites();
-            self.battle_make_scene();
-            self.battle_fade_scene();
+            crate::battle::load_battle_sprites(self, battle).ok();
+            crate::battle::make_scene(self, battle);
+            crate::battle::fade_scene(self, battle);
         }
     }
 
@@ -2471,7 +2437,9 @@ impl Engine {
                     if self.ui.playing_rng {
                         self.restore_screen();
                     } else if self.globals.in_battle {
-                        self.battle_make_scene();
+                        with_battle!(self, battle => {
+                            crate::battle::make_scene(self, &mut battle);
+                        });
                         self.video_update();
                     } else {
                         if op[2] != 0 {
@@ -2746,44 +2714,17 @@ impl Engine {
     }
 
     // =======================================================================
-    // XXX cross-module stubs (wire to the real modules on merge).
+    // Small cross-module helpers.
     // =======================================================================
 
-    /// XXX cross-module stub: PAL_LoadBattleSprites (battle.c).
-    fn load_battle_sprites(&mut self) {}
-
-    /// XXX cross-module stub: PAL_BattleSimulateMagic (battle.c).
-    fn battle_simulate_magic(&mut self, _target: i32, _magic_obj: u16, _base_damage: u16) {}
-
-    /// XXX cross-module stub: PAL_BattlePlayerEscape (battle.c).
-    fn battle_player_escape(&mut self) {}
-
-    /// XXX cross-module stub: PAL_BattleEnemyEscape (battle.c).
-    fn battle_enemy_escape(&mut self) {}
-
-    /// XXX cross-module stub: PAL_BattleStealFromEnemy (battle.c).
-    fn battle_steal_from_enemy(&mut self, _enemy_index: u16, _steal_rate: u16) {}
-
-    /// XXX cross-module stub: PAL_BattleShowPlayerPreMagicAnim (battle.c).
-    fn battle_show_player_pre_magic_anim(&mut self, _player_index: usize, _summon: bool) {}
-
-    /// XXX cross-module stub: PAL_BattleDelay (battle.c).
-    fn battle_delay(&mut self, _duration: u16, _obj_id: u16, _update_gesture: bool) {}
-
-    /// XXX cross-module stub: PAL_BattleUpdateFighters (battle.c).
-    fn battle_update_fighters(&mut self) {}
-
-    /// XXX cross-module stub: PAL_BattleMakeScene (battle.c).
-    fn battle_make_scene(&mut self) {}
-
-    /// XXX cross-module stub: PAL_BattleFadeScene (battle.c).
-    fn battle_fade_scene(&mut self) {}
-
-    /// XXX cross-module stub: PAL_DrawText, one credit line (uigame.c/font.c).
+    /// PAL_DrawText for one line of the additional-credits roll (uigame.c).
+    /// The credits screen itself is not part of this port's scope; the roll is
+    /// driven entirely by timing and this per-line draw is intentionally a
+    /// no-op (the credits text sprites are never loaded headlessly).
     fn draw_text_line(&mut self, _y: i32) {}
 
-    /// XXX cross-module stub: PAL_Shutdown (main.c). Requests a quit instead
-    /// of exiting the process.
+    /// PAL_Shutdown (main.c).  This port requests a graceful quit instead of
+    /// terminating the process, so the game loop can unwind normally.
     fn shutdown(&mut self) {
         self.quit_requested = true;
     }

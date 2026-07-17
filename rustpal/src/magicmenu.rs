@@ -31,7 +31,7 @@ struct MagicItem {
 /// The magic-menu context (magicmenu.c file statics rgMagicItem /
 /// g_iNumMagic / g_iCurrentItem / g_wPlayerMP), owned locally so the menu is
 /// re-entrant.
-struct MagicMenuCtx {
+pub(crate) struct MagicMenuCtx {
     items: Vec<MagicItem>,
     current: usize,
     player_mp: u16,
@@ -39,7 +39,7 @@ struct MagicMenuCtx {
 
 impl Engine {
     /// PAL_MagicSelectionMenuInit.
-    fn magic_selection_menu_init(
+    pub(crate) fn magic_selection_menu_init(
         &self,
         player_role: u16,
         in_battle: bool,
@@ -91,7 +91,7 @@ impl Engine {
 
     /// PAL_MagicSelectionMenuUpdate: draw one frame, returning the selected
     /// magic (0 = cancelled, 0xFFFF = not yet confirmed).
-    fn magic_selection_menu_update(&mut self, ctx: &mut MagicMenuCtx) -> u16 {
+    pub(crate) fn magic_selection_menu_update(&mut self, ctx: &mut MagicMenuCtx) -> u16 {
         use crate::input::{
             KEY_DOWN, KEY_END, KEY_HOME, KEY_LEFT, KEY_MENU, KEY_PGDN, KEY_PGUP, KEY_RIGHT,
             KEY_SEARCH, KEY_UP,
@@ -255,7 +255,14 @@ impl Engine {
             let mut w = 45;
             for i in 0..=self.globals.max_party_member_index as usize {
                 let role = self.globals.party[i].player_role;
-                self.player_info_box((w, 165), role, 100, TIMEMETER_COLOR_DEFAULT, false);
+                crate::uibattle::player_info_box(
+                    self,
+                    (w, 165),
+                    role as usize,
+                    100,
+                    TIMEMETER_COLOR_DEFAULT,
+                    false,
+                );
                 w += 78;
             }
 
