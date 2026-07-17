@@ -2779,32 +2779,6 @@ impl Engine {
     /// XXX cross-module stub: PAL_BattleFadeScene (battle.c).
     fn battle_fade_scene(&mut self) {}
 
-    /// XXX cross-module stub: PAL_BuyMenu (itemmenu.c).
-    fn buy_menu(&mut self, _store_num: u16) {}
-
-    /// XXX cross-module stub: PAL_SellMenu (itemmenu.c).
-    fn sell_menu(&mut self) {}
-
-    /// XXX cross-module stub: PAL_ConfirmMenu (uigame.c). Defaults to "yes".
-    fn confirm_menu(&mut self) -> bool {
-        true
-    }
-
-    /// XXX cross-module stub: PAL_StartDialogWithOffset (text.c).
-    fn start_dialog_with_offset(
-        &mut self,
-        _dialog_location: u8,
-        _font_color: u8,
-        _num_char_face: i32,
-        _playing_rng: bool,
-        _x: i32,
-        _y: i32,
-    ) {
-    }
-
-    /// XXX cross-module stub: PAL_DrawOpeningMenuBackground (uigame.c).
-    fn draw_opening_menu_background(&mut self) {}
-
     /// XXX cross-module stub: PAL_DrawText, one credit line (uigame.c/font.c).
     fn draw_text_line(&mut self, _y: i32) {}
 

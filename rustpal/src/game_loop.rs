@@ -264,6 +264,8 @@ impl Engine {
             scene: Default::default(),
             play: Default::default(),
         };
+        // Headless engines (tests, tools) must never block on input.
+        engine.ui.auto_confirm = headless;
         // Create the window right away so the first present works.
         engine.process_event();
         Ok(engine)

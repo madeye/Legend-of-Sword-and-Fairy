@@ -224,7 +224,7 @@ impl Engine {
         } else if self.input.pressed(KEY_FORCE) {
             self.in_game_magic_menu();
         } else if self.input.pressed(KEY_STATUS) {
-            self.player_status_menu();
+            self.player_status();
         } else if self.input.pressed(KEY_SEARCH) {
             self.search();
         } else if self.input.pressed(KEY_FLEE) {
@@ -343,6 +343,11 @@ impl Engine {
     }
 
     fn wait_for_key_internal(&mut self, timeout: u16, allow_any_key: bool) {
+        if self.ui.auto_confirm {
+            // Headless test escape hatch: don't block on input.
+            self.input.clear_key_state();
+            return;
+        }
         let deadline = self.ticks() + timeout as u64;
         self.input.clear_key_state();
 
@@ -362,7 +367,7 @@ impl Engine {
     /// `PAL_GameUseItem`: let the player use an item in the game.
     pub fn game_use_item(&mut self) {
         loop {
-            let object = self.item_select_menu(ITEMFLAG_USABLE);
+            let object = self.item_select_menu(None, ITEMFLAG_USABLE);
             if object == 0 {
                 return;
             }
@@ -399,7 +404,7 @@ impl Engine {
     /// `PAL_GameEquipItem`: let the player equip an item in the game.
     pub fn game_equip_item(&mut self) {
         loop {
-            let object = self.item_select_menu(ITEMFLAG_EQUIPABLE);
+            let object = self.item_select_menu(None, ITEMFLAG_EQUIPABLE);
             if object == 0 {
                 return;
             }
@@ -422,39 +427,6 @@ impl Engine {
         }
         let _ = LOAD_GLOBAL_DATA; // documents which flag drives the above
     }
-
-    // =======================================================================
-    // XXX cross-module stubs (wire to the real modules on merge).
-    // =======================================================================
-
-    /// XXX cross-module stub: PAL_InGameMenu (uigame.c).
-    fn in_game_menu(&mut self) {}
-
-    /// XXX cross-module stub: PAL_InGameMagicMenu (magicmenu.c).
-    fn in_game_magic_menu(&mut self) {}
-
-    /// XXX cross-module stub: PAL_PlayerStatus (uigame.c).
-    fn player_status_menu(&mut self) {}
-
-    /// XXX cross-module stub: PAL_QuitGame (uigame.c).
-    fn quit_game(&mut self) {
-        self.quit_requested = true;
-    }
-
-    /// XXX cross-module stub: PAL_ItemSelectMenu (itemmenu.c). Returns the
-    /// chosen object id, or 0 to cancel.
-    fn item_select_menu(&mut self, _flags: u16) -> u16 {
-        0
-    }
-
-    /// XXX cross-module stub: PAL_ItemUseMenu (itemmenu.c). Returns the chosen
-    /// player role, or MENUITEM_VALUE_CANCELLED.
-    fn item_use_menu(&mut self, _object: u16) -> u16 {
-        MENUITEM_VALUE_CANCELLED
-    }
-
-    /// XXX cross-module stub: PAL_EquipItemMenu (itemmenu.c).
-    fn equip_item_menu(&mut self, _object: u16) {}
 }
 
 #[cfg(test)]
