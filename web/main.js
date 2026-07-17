@@ -75,12 +75,24 @@ async function boot() {
     console.warn("audio unavailable:", e);
     audioSab = null;
   }
-  // Browsers keep the context suspended until a user gesture.
-  const resumeAudio = () => {
-    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  // Browsers keep the context suspended until a user gesture. On touch
+  // devices there is no keydown, and tap "click" events can be swallowed by
+  // zoom heuristics — touchend/pointerup are the activation events that
+  // reliably fire on a tap. A visible hint shows until the context runs.
+  const soundHint = document.getElementById("sound");
+  const updateSoundHint = () => {
+    soundHint.hidden = !audioCtx || audioCtx.state === "running";
   };
-  window.addEventListener("keydown", resumeAudio);
-  window.addEventListener("click", resumeAudio);
+  const resumeAudio = () => {
+    if (audioCtx && audioCtx.state !== "running") audioCtx.resume();
+  };
+  if (audioCtx) {
+    audioCtx.onstatechange = updateSoundHint;
+    updateSoundHint();
+  }
+  for (const ev of ["keydown", "click", "pointerup", "touchend"]) {
+    window.addEventListener(ev, resumeAudio);
+  }
 
   // Fetch all game data up front (~13 MB).
   let loaded = 0;
