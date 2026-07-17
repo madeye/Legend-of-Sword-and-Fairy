@@ -20,6 +20,9 @@ cargo run --release
 
 #### 浏览器版 / Running in the browser (wasm)
 
+**在线试玩 / Play online**: <https://madeye.github.io/Legend-of-Sword-and-Fairy/>
+（由 GitHub Actions 自动构建部署，见 `.github/workflows/pages.yml`）
+
 整个同步引擎原样运行在 Web Worker 中：画面输出到 canvas，键盘输入与
 音频采样通过 SharedArrayBuffer 环形缓冲传递（音乐由 AudioWorklet 播放），
 存档保存在 localStorage。
@@ -32,9 +35,11 @@ python3 web/serve.py    # 本地服务器（带 SharedArrayBuffer 所需的 COOP
 # 打开 http://127.0.0.1:8080/web/
 ```
 
-注意：浏览器要求页面有一次点击/按键后才会开始播放声音；部署到其他
-服务器时需设置 `Cross-Origin-Opener-Policy: same-origin` 和
-`Cross-Origin-Embedder-Policy: require-corp` 响应头。
+注意：浏览器要求页面有一次点击/按键后才会开始播放声音。SharedArrayBuffer
+需要跨源隔离：自建服务器请设置 `Cross-Origin-Opener-Policy: same-origin` 和
+`Cross-Origin-Embedder-Policy: require-corp` 响应头；无法自定义响应头的
+静态托管（如 GitHub Pages）由页面内置的 `coi-serviceworker.js` 代为注入
+（首次访问会自动刷新一次）。
 
 #### 支持平台
 

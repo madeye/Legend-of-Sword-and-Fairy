@@ -30,6 +30,9 @@
 <canvas id="screen" width="320" height="200"></canvas>
 <div id="status">loading…</div>
 <div id="keys">方向鍵 移動 · 空格/回車 確認 · Esc 菜單 · 戰鬥: R 連擊 A 自動 D 防禦 E 物品 W 投擲 Q 逃跑 F 仙術 S 狀態</div>
+<!-- Injects COOP/COEP headers via a service worker on hosts that can't set
+     response headers (e.g. GitHub Pages); no-op when already isolated. -->
+<script src="coi-serviceworker.js"></script>
 <script src="main.js"></script>
 </body>
 </html>
