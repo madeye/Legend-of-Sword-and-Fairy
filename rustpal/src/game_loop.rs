@@ -1,2 +1,642 @@
-//! STUB - to be implemented during engine bring-up.
-#![allow(dead_code)]
+//! The engine core: the `Engine` struct that owns all game state (the Rust
+//! equivalent of SDLPAL's globals), the winit/pixels video shell (video.c),
+//! frame timing (UTIL_Delay / PAL_ProcessEvent), and the palette effects of
+//! palette.c plus the screen transitions of video.c.
+//!
+//! Other engine modules (scene.rs, script.rs, ui.rs, play.rs, battle.rs)
+//! extend `Engine` with their own `impl` blocks.
+#![allow(dead_code)] // used incrementally as engine bring-up proceeds
+
+use std::io;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use pixels::{Pixels, SurfaceTexture};
+use winit::application::ApplicationHandler;
+use winit::event::{ElementState, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::PhysicalKey;
+use winit::platform::pump_events::EventLoopExtPumpEvents;
+use winit::window::{Window, WindowId};
+
+use crate::data::DataDir;
+use crate::font::Font;
+use crate::global::Globals;
+use crate::input::InputState;
+use crate::mkf::Mkf;
+use crate::res::Resources;
+use crate::surface::{Surface, SCREEN_H, SCREEN_W};
+use crate::text::Texts;
+
+/// Scene frame time (game.h: FPS = 10).
+pub const FRAME_TIME: u64 = 100;
+/// Battle frame time (battle.h: BATTLE_FPS = 25).
+pub const BATTLE_FRAME_TIME: u64 = 40;
+
+const WINDOW_SCALE: u32 = 3;
+
+/// One entry of the hardware palette.
+pub type PalColor = [u8; 3];
+
+// ===========================================================================
+// Video shell (video.c): winit window + pixels framebuffer, pumped
+// synchronously so the imperative game flow of the original engine works.
+// ===========================================================================
+
+struct VideoApp {
+    window: Option<Arc<Window>>,
+    pixels: Option<Pixels<'static>>,
+    key_events: Vec<(winit::keyboard::KeyCode, bool)>,
+    close_requested: bool,
+    /// RGBA staging buffer (320x200x4).
+    rgba: Vec<u8>,
+}
+
+impl ApplicationHandler for VideoApp {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("rustpal — 仙劍奇俠傳")
+            .with_inner_size(winit::dpi::LogicalSize::new(
+                (SCREEN_W as u32 * WINDOW_SCALE) as f64,
+                (SCREEN_H as u32 * WINDOW_SCALE) as f64,
+            ));
+        let window = Arc::new(event_loop.create_window(attrs).expect("create game window"));
+        let size = window.inner_size();
+        let texture = SurfaceTexture::new(size.width, size.height, window.clone());
+        let pixels = Pixels::new(SCREEN_W as u32, SCREEN_H as u32, texture)
+            .expect("create pixel framebuffer");
+        self.window = Some(window);
+        self.pixels = Some(pixels);
+    }
+
+    fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => self.close_requested = true,
+            WindowEvent::Resized(size) => {
+                if let Some(p) = self.pixels.as_mut() {
+                    let _ = p.resize_surface(size.width.max(1), size.height.max(1));
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    self.key_events
+                        .push((code, event.state == ElementState::Pressed));
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                if let Some(p) = self.pixels.as_mut() {
+                    let _ = p.render();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The window + framebuffer (None in headless mode, e.g. tests).
+pub struct Video {
+    event_loop: EventLoop<()>,
+    app: VideoApp,
+}
+
+impl Video {
+    pub fn new() -> io::Result<Video> {
+        let event_loop =
+            EventLoop::new().map_err(|e| io::Error::other(format!("winit event loop: {e}")))?;
+        Ok(Video {
+            event_loop,
+            app: VideoApp {
+                window: None,
+                pixels: None,
+                key_events: Vec::new(),
+                close_requested: false,
+                rgba: vec![0; SCREEN_W * SCREEN_H * 4],
+            },
+        })
+    }
+
+    /// Pump pending window events; returns collected key transitions.
+    fn pump(&mut self) -> Vec<(winit::keyboard::KeyCode, bool)> {
+        self.event_loop
+            .pump_app_events(Some(Duration::ZERO), &mut self.app);
+        std::mem::take(&mut self.app.key_events)
+    }
+
+    /// Present an indexed surface with the given palette.
+    fn present(&mut self, surf: &Surface, palette: &[PalColor; 256], shake: Option<(u16, u16)>) {
+        let Some(pixels) = self.app.pixels.as_mut() else {
+            return;
+        };
+        let rgba = &mut self.app.rgba;
+        match shake {
+            None => {
+                for (i, &px) in surf.pixels.iter().enumerate() {
+                    let c = palette[px as usize];
+                    let o = i * 4;
+                    rgba[o] = c[0];
+                    rgba[o + 1] = c[1];
+                    rgba[o + 2] = c[2];
+                    rgba[o + 3] = 0xff;
+                }
+            }
+            Some((time, level)) => {
+                // VIDEO_UpdateScreen shake: shift the image up or down by
+                // `level` lines depending on frame parity; blank the rest.
+                rgba.fill(0);
+                let level = level as usize % SCREEN_H;
+                let h = SCREEN_H - level;
+                let (src_y0, dst_y0) = if time & 1 != 0 {
+                    (level, 0)
+                } else {
+                    (0, level)
+                };
+                for y in 0..h {
+                    let sy = src_y0 + y;
+                    let dy = dst_y0 + y;
+                    for x in 0..SCREEN_W {
+                        let c = palette[surf.pixels[sy * SCREEN_W + x] as usize];
+                        let o = (dy * SCREEN_W + x) * 4;
+                        rgba[o] = c[0];
+                        rgba[o + 1] = c[1];
+                        rgba[o + 2] = c[2];
+                        rgba[o + 3] = 0xff;
+                    }
+                }
+            }
+        }
+        pixels.frame_mut().copy_from_slice(rgba);
+        let _ = pixels.render();
+    }
+}
+
+// ===========================================================================
+// Engine.
+// ===========================================================================
+
+/// Everything the running game owns.
+pub struct Engine {
+    pub globals: Globals,
+    pub res: Resources,
+    pub texts: Texts,
+    pub font: Font,
+
+    /// The 320x200 work surface (gpScreen).
+    pub screen: Surface,
+    /// The backup surface (gpScreenBak).
+    pub screen_bak: Surface,
+
+    /// Current hardware palette (VIDEO_GetPalette()).
+    pub palette: [PalColor; 256],
+    /// PAT.MKF archive for palette loading.
+    pat: Mkf,
+
+    /// Screen shake state (video.c g_wShakeTime/g_wShakeLevel).
+    pub shake_time: u16,
+    pub shake_level: u16,
+
+    pub input: InputState,
+    video: Option<Video>,
+    start: Instant,
+
+    /// Set when the user asked to quit (window close / Alt+F4).
+    pub quit_requested: bool,
+
+    // Per-module state (owned by the respective module files).
+    pub script: crate::script::ScriptState,
+    pub ui: crate::ui::UiState,
+    pub scene: crate::scene::SceneState,
+    pub play: crate::play::PlayState,
+}
+
+impl Engine {
+    /// Initialize the engine. `headless` skips window creation (tests).
+    pub fn new(headless: bool) -> io::Result<Engine> {
+        let data_dir = DataDir::new()?;
+        let pat = data_dir.mkf("pat.mkf")?;
+        let texts = Texts::load(&data_dir)?;
+        let font = Font::load(&data_dir)?;
+        let globals = Globals::init(data_dir)?;
+        let video = if headless { None } else { Some(Video::new()?) };
+
+        let mut engine = Engine {
+            globals,
+            res: Resources::new(),
+            texts,
+            font,
+            screen: Surface::screen(),
+            screen_bak: Surface::screen(),
+            palette: [[0; 3]; 256],
+            pat,
+            shake_time: 0,
+            shake_level: 0,
+            input: InputState::new(),
+            video,
+            start: Instant::now(),
+            quit_requested: false,
+            script: Default::default(),
+            ui: Default::default(),
+            scene: Default::default(),
+            play: Default::default(),
+        };
+        // Create the window right away so the first present works.
+        engine.process_event();
+        Ok(engine)
+    }
+
+    /// Milliseconds since engine start (SDL_GetTicks equivalent).
+    pub fn ticks(&self) -> u64 {
+        self.start.elapsed().as_millis() as u64
+    }
+
+    /// PAL_ProcessEvent: pump window events and update the input state.
+    pub fn process_event(&mut self) {
+        if let Some(video) = self.video.as_mut() {
+            for (code, pressed) in video.pump() {
+                self.input.handle_key_event(code, pressed);
+            }
+            if video.app.close_requested {
+                self.quit_requested = true;
+            }
+        }
+        let now = self.ticks();
+        self.input.update_keyboard_state(now);
+    }
+
+    /// UTIL_Delay: wait while still pumping events.
+    pub fn delay(&mut self, ms: u64) {
+        let end = self.ticks() + ms;
+        loop {
+            self.process_event();
+            if self.ticks() >= end {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5.min(end - self.ticks())));
+        }
+    }
+
+    /// Wait until the given tick deadline, pumping events (the common
+    /// `while (!SDL_TICKS_PASSED(...)) { PAL_ProcessEvent(); SDL_Delay(5); }`
+    /// pattern).
+    pub fn delay_until(&mut self, deadline: u64) {
+        self.process_event();
+        while self.ticks() < deadline {
+            self.process_event();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// VIDEO_UpdateScreen(NULL): present the work surface.
+    pub fn video_update(&mut self) {
+        let shake = if self.shake_time != 0 {
+            let s = Some((self.shake_time, self.shake_level));
+            self.shake_time -= 1;
+            s
+        } else {
+            None
+        };
+        if let Some(video) = self.video.as_mut() {
+            video.present(&self.screen, &self.palette, shake);
+        }
+    }
+
+    /// Present an arbitrary surface (used by transitions on gpScreenBak).
+    fn video_present_surface(&mut self, which_bak: bool) {
+        let shake = if self.shake_time != 0 {
+            let s = Some((self.shake_time, self.shake_level));
+            self.shake_time -= 1;
+            s
+        } else {
+            None
+        };
+        if let Some(video) = self.video.as_mut() {
+            let surf = if which_bak {
+                &self.screen_bak
+            } else {
+                &self.screen
+            };
+            video.present(surf, &self.palette, shake);
+        }
+    }
+
+    /// AUDIO_PlayMusic. BRING-UP STUB — wired to the RIX player when the
+    /// audio stack lands; music number 0 stops music.
+    pub fn play_music(&mut self, _num: i32, _looping: bool, _fade_time: f32) {
+        // STUB
+    }
+
+    /// AUDIO_PlaySound / SOUND_Play. Negative or zero numbers are ignored
+    /// exactly like the C code. BRING-UP STUB until the audio stack lands.
+    pub fn play_sound(&mut self, _num: i32) {
+        // STUB
+    }
+
+    /// VIDEO_ShakeScreen.
+    pub fn shake_screen(&mut self, time: u16, level: u16) {
+        self.shake_time = time;
+        self.shake_level = level;
+    }
+
+    /// VIDEO_BackupScreen (screen -> backup).
+    pub fn backup_screen(&mut self) {
+        self.screen_bak.pixels.copy_from_slice(&self.screen.pixels);
+    }
+
+    /// VIDEO_RestoreScreen (backup -> screen).
+    pub fn restore_screen(&mut self) {
+        self.screen.pixels.copy_from_slice(&self.screen_bak.pixels);
+    }
+
+    // =======================================================================
+    // Palette effects (palette.c).
+    // =======================================================================
+
+    /// PAL_GetPalette.
+    pub fn get_palette(&self, num: usize, night: bool) -> io::Result<[PalColor; 256]> {
+        let p = crate::palette::Palette::from_mkf(&self.pat, num, night)?;
+        Ok(p.colors)
+    }
+
+    /// PAL_SetPalette.
+    pub fn set_palette(&mut self, num: usize, night: bool) {
+        if let Ok(p) = self.get_palette(num, night) {
+            self.palette = p;
+            self.video_update();
+        }
+    }
+
+    /// Set the raw hardware palette (VIDEO_SetPalette) and refresh.
+    pub fn set_raw_palette(&mut self, palette: [PalColor; 256]) {
+        self.palette = palette;
+        self.video_update();
+    }
+
+    /// PAL_FadeOut.
+    pub fn fade_out(&mut self, delay: u64) {
+        let palette = self.palette;
+        let delay = delay.max(1);
+        let time = self.ticks() + delay * 10 * 60;
+        loop {
+            let now = self.ticks();
+            if now > time {
+                break;
+            }
+            let j = ((time - now) / delay / 10) as i64;
+            if j < 0 {
+                break;
+            }
+            let mut newpal = [[0u8; 3]; 256];
+            for i in 0..256 {
+                for c in 0..3 {
+                    newpal[i][c] = ((palette[i][c] as i64 * j) >> 6) as u8;
+                }
+            }
+            self.set_raw_palette(newpal);
+            self.delay(10);
+        }
+        self.set_raw_palette([[0; 3]; 256]);
+    }
+
+    /// PAL_FadeIn.
+    pub fn fade_in(&mut self, num: usize, night: bool, delay: u64) {
+        let Ok(palette) = self.get_palette(num, night) else {
+            return;
+        };
+        let delay = delay.max(1);
+        let time = self.ticks() + delay * 10 * 60;
+        loop {
+            let now = self.ticks();
+            if now > time {
+                break;
+            }
+            let j = 60 - ((time - now) / delay / 10) as i64;
+            if j > 60 {
+                break;
+            }
+            let j = j.max(0);
+            let mut newpal = [[0u8; 3]; 256];
+            for i in 0..256 {
+                for c in 0..3 {
+                    newpal[i][c] = ((palette[i][c] as i64 * j) >> 6) as u8;
+                }
+            }
+            self.set_raw_palette(newpal);
+            self.delay(10);
+        }
+        self.set_raw_palette(palette);
+    }
+
+    /// PAL_SceneFade: fade in (step > 0) or out (step < 0), updating the
+    /// scene during the process.
+    pub fn scene_fade(&mut self, num: usize, night: bool, step: i32) {
+        let Ok(palette) = self.get_palette(num, night) else {
+            return;
+        };
+        let step = if step == 0 { 1 } else { step };
+        self.globals.need_to_fade_in = false;
+
+        let apply = |eng: &mut Engine, i: i32| {
+            let deadline = eng.ticks() + 100;
+            eng.input.clear_key_state();
+            eng.input.reset_dir();
+            eng.game_update(false);
+            eng.make_scene();
+            eng.video_update();
+            let mut newpal = [[0u8; 3]; 256];
+            for j in 0..256 {
+                for c in 0..3 {
+                    newpal[j][c] = ((palette[j][c] as i32 * i) >> 6) as u8;
+                }
+            }
+            eng.palette = newpal;
+            eng.video_update();
+            eng.delay_until(deadline);
+        };
+
+        if step > 0 {
+            let mut i = 0;
+            while i < 64 {
+                apply(self, i);
+                i += step;
+            }
+        } else {
+            let mut i = 63;
+            while i >= 0 {
+                apply(self, i);
+                i += step;
+            }
+        }
+    }
+
+    /// PAL_PaletteFade: fade from the current palette to the given one.
+    pub fn palette_fade(&mut self, num: usize, night: bool, update_scene: bool) {
+        let Ok(newpalette) = self.get_palette(num, night) else {
+            return;
+        };
+        let palette = self.palette;
+        for i in 0..32u32 {
+            let deadline = self.ticks()
+                + if update_scene {
+                    FRAME_TIME
+                } else {
+                    FRAME_TIME / 4
+                };
+            let mut t = [[0u8; 3]; 256];
+            for j in 0..256 {
+                for c in 0..3 {
+                    t[j][c] = ((palette[j][c] as u32 * (31 - i) + newpalette[j][c] as u32 * i) / 31)
+                        as u8;
+                }
+            }
+            self.palette = t;
+            if update_scene {
+                self.input.clear_key_state();
+                self.input.reset_dir();
+                self.game_update(false);
+                self.make_scene();
+            }
+            self.video_update();
+            self.delay_until(deadline);
+        }
+    }
+
+    /// PAL_ColorFade: fade the palette from/to a single palette color.
+    pub fn color_fade(&mut self, delay: u64, color: u8, from: bool) {
+        let Ok(palette) = self.get_palette(
+            self.globals.num_palette as usize,
+            self.globals.night_palette,
+        ) else {
+            return;
+        };
+        let delay = (delay * 10).max(10);
+
+        let step_channel = |cur: &mut u8, target: u8| {
+            if *cur > target {
+                *cur -= 4.min(*cur - target);
+            } else if *cur < target {
+                *cur += 4.min(target - *cur);
+            }
+        };
+
+        if from {
+            let mut newpal = [palette[color as usize]; 256];
+            for _ in 0..64 {
+                for j in 0..256 {
+                    for c in 0..3 {
+                        step_channel(&mut newpal[j][c], palette[j][c]);
+                    }
+                }
+                self.set_raw_palette(newpal);
+                self.delay(delay);
+            }
+            self.set_raw_palette(palette);
+        } else {
+            let mut newpal = palette;
+            let target = palette[color as usize];
+            for _ in 0..64 {
+                for row in newpal.iter_mut() {
+                    for c in 0..3 {
+                        step_channel(&mut row[c], target[c]);
+                    }
+                }
+                self.set_raw_palette(newpal);
+                self.delay(delay);
+            }
+            self.set_raw_palette([target; 256]);
+        }
+    }
+
+    /// PAL_FadeToRed.
+    pub fn fade_to_red(&mut self) {
+        let Ok(palette) = self.get_palette(
+            self.globals.num_palette as usize,
+            self.globals.night_palette,
+        ) else {
+            return;
+        };
+        let mut newpalette = palette;
+
+        // HACKHACK from the C code: color 0x4F -> 0x4E on the screen so
+        // dialog text is not affected.
+        for px in self.screen.pixels.iter_mut() {
+            if *px == 0x4F {
+                *px = 0x4E;
+            }
+        }
+        self.video_update();
+
+        for _ in 0..32 {
+            for j in 0..256 {
+                if j == 0x4F {
+                    continue;
+                }
+                let color = ((palette[j][0] as i32 + palette[j][1] as i32 + palette[j][2] as i32)
+                    / 4
+                    + 64) as u8;
+                for cur in newpalette[j].iter_mut() {
+                    if *cur > color {
+                        *cur -= 8.min(*cur - color);
+                    } else if *cur < color {
+                        *cur += 8.min(color - *cur);
+                    }
+                }
+            }
+            self.set_raw_palette(newpalette);
+            self.delay(75);
+        }
+    }
+
+    // =======================================================================
+    // Screen transitions (video.c).
+    // =======================================================================
+
+    /// VIDEO_SwitchScreen: interleaved-pixel switch from backup to screen.
+    pub fn switch_screen(&mut self, speed: u16) {
+        const RG_INDEX: [usize; 6] = [0, 3, 1, 5, 2, 4];
+        let speed = (speed as u64 + 1) * 10;
+
+        for &start in RG_INDEX.iter() {
+            let mut j = start;
+            while j < SCREEN_W * SCREEN_H {
+                self.screen_bak.pixels[j] = self.screen.pixels[j];
+                j += 6;
+            }
+            self.video_present_surface(true);
+            self.delay(speed);
+        }
+    }
+
+    /// VIDEO_FadeScreen: blend from backup buffer to current screen with the
+    /// nibble-stepping pattern of the C code.
+    pub fn fade_screen(&mut self, speed: u16) {
+        const RG_INDEX: [usize; 6] = [0, 3, 1, 5, 2, 4];
+        let speed = (speed as u64 + 1) * 10;
+        let mut time = self.ticks();
+
+        for i in 0..12 {
+            for &start in RG_INDEX.iter() {
+                self.delay_until(time);
+                time = self.ticks() + speed;
+
+                let mut k = start;
+                while k < SCREEN_W * SCREEN_H {
+                    let a = self.screen.pixels[k];
+                    let mut b = self.screen_bak.pixels[k];
+                    if i > 0 {
+                        if (a & 0x0F) > (b & 0x0F) {
+                            b = b.wrapping_add(1);
+                        } else if (a & 0x0F) < (b & 0x0F) {
+                            b = b.wrapping_sub(1);
+                        }
+                    }
+                    self.screen_bak.pixels[k] = (a & 0xF0) | (b & 0x0F);
+                    k += 6;
+                }
+                self.video_present_surface(true);
+            }
+        }
+        self.video_update();
+    }
+}
