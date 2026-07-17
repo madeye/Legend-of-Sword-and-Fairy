@@ -1,16 +1,43 @@
 //! Audio mixer: RIX music + VOC sound effects -> stereo output
 //! (the AUDIO_* layer of SDLPAL audio.c, simplified to the DOS feature set:
 //! RIX music via the OPL emulator and VOC sound effects).
+//!
+//! The web build has no cpal backend yet; `Mixer::new()` returns None there
+//! so the engine runs silent (same as native headless mode).
 #![allow(dead_code)] // used incrementally as engine bring-up proceeds
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex};
 
+#[cfg(not(target_arch = "wasm32"))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::rix::RixPlayer;
 use crate::voc::VocSound;
 
+/// Silent stub for the web build (no audio output device).
+#[cfg(target_arch = "wasm32")]
+pub struct Mixer;
+
+#[cfg(target_arch = "wasm32")]
+impl Mixer {
+    pub fn new() -> Option<Mixer> {
+        None
+    }
+
+    pub fn out_rate(&self) -> u32 {
+        44100
+    }
+
+    pub fn play_music(&self, _rix: RixPlayer, _fade_time: f32) {}
+
+    pub fn stop_music(&self, _fade_time: f32) {}
+
+    pub fn play_sound(&self, _voc: VocSound) {}
+}
+
 /// A playing sound effect instance.
+#[cfg(not(target_arch = "wasm32"))]
 struct SoundInstance {
     /// Mono samples, already centered (i16).
     samples: Vec<i16>,
@@ -20,6 +47,7 @@ struct SoundInstance {
     step: u64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Shared {
     music: Option<RixPlayer>,
     /// Current music volume in [0, 1] and per-frame fade step.
@@ -29,12 +57,14 @@ struct Shared {
 }
 
 /// Software mixer. Everything is rendered at the output device's rate.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Mixer {
     _stream: cpal::Stream,
     shared: Arc<Mutex<Shared>>,
     out_rate: u32,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Mixer {
     /// Open the default output device. Returns None if no device is
     /// available (headless CI, tests).

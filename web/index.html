@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>rustpal — 仙劍奇俠傳</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #111;
+    color: #ccc;
+    font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  canvas {
+    width: min(96vw, calc(96vh * 1.6), 960px);
+    aspect-ratio: 16 / 10;
+    image-rendering: pixelated;
+    background: #000;
+    outline: none;
+  }
+  #status { margin-top: 12px; }
+  #keys { color: #777; font-size: 12px; }
+</style>
+</head>
+<body>
+<canvas id="screen" width="320" height="200"></canvas>
+<div id="status">loading…</div>
+<div id="keys">方向鍵 移動 · 空格/回車 確認 · Esc 菜單 · 戰鬥: R 連擊 A 自動 D 防禦 E 物品 W 投擲 Q 逃跑 F 仙術 S 狀態</div>
+<script src="main.js"></script>
+</body>
+</html>

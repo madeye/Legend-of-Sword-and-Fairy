@@ -1683,7 +1683,11 @@ name = "rustpal"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "js-sys",
  "pixels",
+ "wasm-bindgen",
+ "web-sys",
+ "web-time",
  "winit",
 ]
 

@@ -23,7 +23,7 @@ fn wait_for_key(engine: &mut Engine, timeout_ms: u64) {
         if engine.ticks() >= deadline {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        crate::game_loop::sleep_ms(5);
     }
     engine.input.clear_key_state();
 }

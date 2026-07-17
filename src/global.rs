@@ -114,8 +114,8 @@ pub fn seed_random(seed: i32) {
 fn lrand() -> i32 {
     let mut seed = RNG_SEED.load(Ordering::Relaxed);
     if seed == 0 {
-        seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        seed = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i32)
             .unwrap_or(1);
         if seed == 0 {
@@ -1150,8 +1150,17 @@ impl Globals {
 
     /// PAL_LoadGame (DOS format).
     pub fn load_game(&mut self, slot: i32) -> io::Result<()> {
-        let buf = std::fs::read(self.save_file_path(slot))?;
-        self.load_game_from_bytes(&buf)
+        // No filesystem on the web: every load fails -> new game.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = slot;
+            Err(io::Error::new(io::ErrorKind::NotFound, "no saves on web"))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let buf = std::fs::read(self.save_file_path(slot))?;
+            self.load_game_from_bytes(&buf)
+        }
     }
 
     pub fn load_game_from_bytes(&mut self, buf: &[u8]) -> io::Result<()> {
@@ -1253,6 +1262,13 @@ impl Globals {
     /// PAL_SaveGame (DOS format).
     pub fn save_game(&self, slot: i32, saved_times: u16) -> io::Result<()> {
         let buf = self.save_game_to_bytes(saved_times);
+        // No filesystem on the web: saving silently does nothing (PoC).
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (slot, buf);
+            Ok(())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         std::fs::write(self.save_file_path(slot), buf)
     }
 

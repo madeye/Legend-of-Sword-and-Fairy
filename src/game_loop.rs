@@ -8,16 +8,29 @@
 #![allow(dead_code)] // used incrementally as engine bring-up proceeds
 
 use std::io;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
+use web_time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
 use pixels::{Pixels, SurfaceTexture};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::application::ApplicationHandler;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event::{ElementState, WindowEvent};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::keyboard::PhysicalKey;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::platform::pump_events::EventLoopExtPumpEvents;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::window::{Window, WindowId};
+
+#[cfg(target_arch = "wasm32")]
+use crate::web::Video;
 
 use crate::data::DataDir;
 use crate::font::Font;
@@ -33,16 +46,73 @@ pub const FRAME_TIME: u64 = 100;
 /// Battle frame time (battle.h: BATTLE_FPS = 25).
 pub const BATTLE_FRAME_TIME: u64 = 40;
 
+#[cfg(not(target_arch = "wasm32"))]
 const WINDOW_SCALE: u32 = 3;
 
 /// One entry of the hardware palette.
 pub type PalColor = [u8; 3];
+
+/// UTIL_Delay's underlying sleep. On the web the engine runs inside a Web
+/// Worker where blocking is allowed but `std::thread::sleep` panics, so it
+/// parks on `Atomics.wait` instead.
+pub(crate) fn sleep_ms(ms: u64) {
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::sleep(std::time::Duration::from_millis(ms));
+    #[cfg(target_arch = "wasm32")]
+    crate::web::sleep_ms(ms);
+}
+
+/// Convert an indexed surface + palette to RGBA, applying the
+/// VIDEO_UpdateScreen shake effect (shift up/down by `level` lines depending
+/// on frame parity; blank the rest). Shared by the native and web backends.
+pub(crate) fn render_rgba(
+    surf: &Surface,
+    palette: &[PalColor; 256],
+    shake: Option<(u16, u16)>,
+    rgba: &mut [u8],
+) {
+    match shake {
+        None => {
+            for (i, &px) in surf.pixels.iter().enumerate() {
+                let c = palette[px as usize];
+                let o = i * 4;
+                rgba[o] = c[0];
+                rgba[o + 1] = c[1];
+                rgba[o + 2] = c[2];
+                rgba[o + 3] = 0xff;
+            }
+        }
+        Some((time, level)) => {
+            rgba.fill(0);
+            let level = level as usize % SCREEN_H;
+            let h = SCREEN_H - level;
+            let (src_y0, dst_y0) = if time & 1 != 0 {
+                (level, 0)
+            } else {
+                (0, level)
+            };
+            for y in 0..h {
+                let sy = src_y0 + y;
+                let dy = dst_y0 + y;
+                for x in 0..SCREEN_W {
+                    let c = palette[surf.pixels[sy * SCREEN_W + x] as usize];
+                    let o = (dy * SCREEN_W + x) * 4;
+                    rgba[o] = c[0];
+                    rgba[o + 1] = c[1];
+                    rgba[o + 2] = c[2];
+                    rgba[o + 3] = 0xff;
+                }
+            }
+        }
+    }
+}
 
 // ===========================================================================
 // Video shell (video.c): winit window + pixels framebuffer, pumped
 // synchronously so the imperative game flow of the original engine works.
 // ===========================================================================
 
+#[cfg(not(target_arch = "wasm32"))]
 struct VideoApp {
     window: Option<Arc<Window>>,
     pixels: Option<Pixels<'static>>,
@@ -52,6 +122,7 @@ struct VideoApp {
     rgba: Vec<u8>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ApplicationHandler for VideoApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -97,11 +168,13 @@ impl ApplicationHandler for VideoApp {
 }
 
 /// The window + framebuffer (None in headless mode, e.g. tests).
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Video {
     event_loop: EventLoop<()>,
     app: VideoApp,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Video {
     pub fn new() -> io::Result<Video> {
         let event_loop =
@@ -130,45 +203,14 @@ impl Video {
         let Some(pixels) = self.app.pixels.as_mut() else {
             return;
         };
-        let rgba = &mut self.app.rgba;
-        match shake {
-            None => {
-                for (i, &px) in surf.pixels.iter().enumerate() {
-                    let c = palette[px as usize];
-                    let o = i * 4;
-                    rgba[o] = c[0];
-                    rgba[o + 1] = c[1];
-                    rgba[o + 2] = c[2];
-                    rgba[o + 3] = 0xff;
-                }
-            }
-            Some((time, level)) => {
-                // VIDEO_UpdateScreen shake: shift the image up or down by
-                // `level` lines depending on frame parity; blank the rest.
-                rgba.fill(0);
-                let level = level as usize % SCREEN_H;
-                let h = SCREEN_H - level;
-                let (src_y0, dst_y0) = if time & 1 != 0 {
-                    (level, 0)
-                } else {
-                    (0, level)
-                };
-                for y in 0..h {
-                    let sy = src_y0 + y;
-                    let dy = dst_y0 + y;
-                    for x in 0..SCREEN_W {
-                        let c = palette[surf.pixels[sy * SCREEN_W + x] as usize];
-                        let o = (dy * SCREEN_W + x) * 4;
-                        rgba[o] = c[0];
-                        rgba[o + 1] = c[1];
-                        rgba[o + 2] = c[2];
-                        rgba[o + 3] = 0xff;
-                    }
-                }
-            }
-        }
-        pixels.frame_mut().copy_from_slice(rgba);
+        render_rgba(surf, palette, shake, &mut self.app.rgba);
+        pixels.frame_mut().copy_from_slice(&self.app.rgba);
         let _ = pixels.render();
+    }
+
+    /// Whether the user asked to close the window.
+    fn close_requested(&self) -> bool {
+        self.app.close_requested
     }
 }
 
@@ -297,7 +339,7 @@ impl Engine {
             for (code, pressed) in video.pump() {
                 self.input.handle_key_event(code, pressed);
             }
-            if video.app.close_requested {
+            if video.close_requested() {
                 self.quit_requested = true;
             }
         }
@@ -313,7 +355,7 @@ impl Engine {
             if self.ticks() >= end {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(5.min(end - self.ticks())));
+            sleep_ms(5.min(end - self.ticks()));
         }
     }
 
@@ -324,7 +366,7 @@ impl Engine {
         self.process_event();
         while self.ticks() < deadline {
             self.process_event();
-            std::thread::sleep(Duration::from_millis(5));
+            sleep_ms(5);
         }
     }
 

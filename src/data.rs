@@ -1,6 +1,10 @@
 //! Locates and reads the original PAL DOS game data files (the `pal/` dir).
+//! On the web the "directory" is the `PAL_FILES` map (file name ->
+//! Uint8Array) that web/worker.js installs on the worker global scope before
+//! starting the engine.
 #![allow(dead_code)] // used incrementally as engine bring-up proceeds
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -11,6 +15,55 @@ pub struct DataDir {
     root: PathBuf,
 }
 
+#[cfg(target_arch = "wasm32")]
+impl DataDir {
+    pub fn new() -> io::Result<DataDir> {
+        // Verify the file map is present so a bad setup fails at boot.
+        files_map()?;
+        Ok(DataDir {
+            root: PathBuf::from("pal"),
+        })
+    }
+
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
+    /// Read an entire data file. File name matching is case-insensitive
+    /// (the map keys are the upper-case DOS file names).
+    pub fn read_file(&self, name: &str) -> io::Result<Vec<u8>> {
+        let files = files_map()?;
+        let v = js_sys::Reflect::get(&files, &name.to_uppercase().into())
+            .map_err(|_| io::Error::other("PAL_FILES lookup failed"))?;
+        if v.is_undefined() || v.is_null() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("data file not found: {}", name),
+            ));
+        }
+        Ok(js_sys::Uint8Array::new(&v).to_vec())
+    }
+
+    /// Open an MKF archive from the data dir.
+    pub fn mkf(&self, name: &str) -> io::Result<Mkf> {
+        Mkf::from_bytes(self.read_file(name)?)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn files_map() -> io::Result<wasm_bindgen::JsValue> {
+    let v = js_sys::Reflect::get(&js_sys::global(), &"PAL_FILES".into())
+        .map_err(|_| io::Error::other("no global scope"))?;
+    if v.is_undefined() || v.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "PAL_FILES not set on the worker global scope",
+        ));
+    }
+    Ok(v)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl DataDir {
     /// Find the game data directory. Searches, in order:
     /// `PAL_DATA_DIR` env var, `<cwd>/pal`, `<cwd>`, `<exe>/pal`, `<exe>/../pal`.
@@ -70,6 +123,7 @@ impl DataDir {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn has_data_files(dir: &PathBuf) -> bool {
     let Ok(entries) = fs::read_dir(dir) else {
         return false;
