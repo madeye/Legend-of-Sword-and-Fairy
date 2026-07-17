@@ -204,10 +204,7 @@ mod tests {
     use crate::data::DataDir;
 
     fn rng_mkf() -> crate::mkf::Mkf {
-        std::env::set_var(
-            "PAL_DATA_DIR",
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../pal"),
-        );
+        std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
         DataDir::new().unwrap().mkf("rng.mkf").unwrap()
     }
 

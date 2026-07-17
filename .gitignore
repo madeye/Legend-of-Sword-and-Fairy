@@ -1,6 +1,6 @@
 stderr.txt
 stdout.txt
 reference/
-rustpal/target/
+/target/
 err.log
 .claude/

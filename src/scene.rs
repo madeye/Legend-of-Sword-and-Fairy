@@ -605,10 +605,7 @@ mod tests {
     use crate::global::{EventObject, LOAD_PLAYER_SPRITE, LOAD_SCENE};
 
     fn engine() -> Engine {
-        std::env::set_var(
-            "PAL_DATA_DIR",
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../pal"),
-        );
+        std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
         Engine::new(true).expect("engine")
     }
 

@@ -9,10 +9,7 @@ use rustpal::global::{seed_random, ScriptEntry, MAX_PLAYER_MAGICS};
 use winit::keyboard::KeyCode;
 
 fn new_game_engine() -> Engine {
-    std::env::set_var(
-        "PAL_DATA_DIR",
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../pal"),
-    );
+    std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
     let mut e = Engine::new(true).expect("headless engine");
     e.globals.current_save_slot = 0;
     e.globals.in_main_game = true;
@@ -87,10 +84,7 @@ fn player_walks_with_key_input_and_stops_at_obstacles() {
 /// strong, magic-less party member — so auto-battle picks physical attacks and
 /// reliably wins a weak fight.  Battles run with the `instant` fast path.
 fn battle_engine() -> Engine {
-    std::env::set_var(
-        "PAL_DATA_DIR",
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../pal"),
-    );
+    std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
     let mut e = Engine::new(true).expect("headless engine");
     e.globals.load_default_game().expect("default game");
     e.globals.max_party_member_index = 0;

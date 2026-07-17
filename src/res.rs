@@ -143,10 +143,7 @@ mod tests {
     use crate::data::DataDir;
 
     fn globals() -> Globals {
-        std::env::set_var(
-            "PAL_DATA_DIR",
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../pal"),
-        );
+        std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
         Globals::init(DataDir::new().expect("data dir")).expect("globals")
     }
 

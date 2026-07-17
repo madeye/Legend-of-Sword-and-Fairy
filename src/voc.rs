@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     fn decodes_all_real_voc_chunks() {
-        let chunks = read_mkf_chunks("../pal/voc.mkf");
+        let chunks = read_mkf_chunks(concat!(env!("CARGO_MANIFEST_DIR"), "/pal/voc.mkf"));
         assert!(!chunks.is_empty());
 
         // Empty chunks are unused MKF slots, not VOC data; the success rate

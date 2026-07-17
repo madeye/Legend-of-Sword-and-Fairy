@@ -445,10 +445,7 @@ mod tests {
     use super::*;
 
     fn data() -> DataDir {
-        std::env::set_var(
-            "PAL_DATA_DIR",
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../pal"),
-        );
+        std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
         DataDir::new().expect("game data dir")
     }
 
