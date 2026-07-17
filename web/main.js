@@ -55,6 +55,24 @@ async function boot() {
     if (pushKey(e.code, false)) e.preventDefault();
   });
 
+  // Virtual gamepad (touch devices): buttons push the same key ring entries.
+  // Pointer capture keeps the release firing even if the finger slides off.
+  for (const btn of document.querySelectorAll("#touch [data-key]")) {
+    const code = btn.dataset.key;
+    btn.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      pushKey(code, true);
+      try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    for (const ev of ["pointerup", "pointercancel"]) {
+      btn.addEventListener(ev, (e) => {
+        e.preventDefault();
+        pushKey(code, false);
+      });
+    }
+    btn.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
+
   // Audio: an AudioWorklet drains a sample ring the engine worker fills.
   // 8-byte header (write/read counters) + 16384 stereo f32 frames.
   let audioSab = null;

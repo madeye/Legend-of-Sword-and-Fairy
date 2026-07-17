@@ -37,6 +37,9 @@ python3 web/serve.py    # 本地服务器（带 SharedArrayBuffer 所需的 COOP
 # 打开 http://127.0.0.1:8080/web/
 ```
 
+触屏设备（手机/平板）会显示虚拟按键：左下方向键，右下 確認/取消/連擊，
+可完整游玩（战斗菜单均可用方向键 + 確認/取消 操作）。
+
 注意：浏览器要求页面有一次点击/按键后才会开始播放声音。SharedArrayBuffer
 需要跨源隔离：自建服务器请设置 `Cross-Origin-Opener-Policy: same-origin` 和
 `Cross-Origin-Embedder-Policy: require-corp` 响应头；无法自定义响应头的
