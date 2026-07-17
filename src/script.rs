@@ -461,6 +461,7 @@ impl Engine {
         self.set_palette(0, false);
         self.video_update();
         self.wait_for_key(0);
+        self.disable_enhanced_background();
     }
 
     // =======================================================================

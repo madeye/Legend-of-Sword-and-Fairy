@@ -7,7 +7,7 @@
 //! extend `Engine` with their own `impl` blocks.
 #![allow(dead_code)] // used incrementally as engine bring-up proceeds
 
-use std::io;
+use std::io::{self, Cursor};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,7 +33,15 @@ pub const FRAME_TIME: u64 = 100;
 /// Battle frame time (battle.h: BATTLE_FPS = 25).
 pub const BATTLE_FRAME_TIME: u64 = 40;
 
-const WINDOW_SCALE: u32 = 3;
+/// Native presentation size. The original 8:5 framebuffer is rendered into a
+/// 1152x720 viewport with narrow pillarboxes, preserving its geometry instead
+/// of stretching it to 16:9.
+pub const DISPLAY_W: usize = 1280;
+pub const DISPLAY_H: usize = 720;
+const VIEW_W: usize = 1152;
+const VIEW_X: usize = (DISPLAY_W - VIEW_W) / 2;
+
+const OPENING_MENU_HD_PNG: &[u8] = include_bytes!("../resources/hd/opening-menu-720p.png");
 
 /// One entry of the hardware palette.
 pub type PalColor = [u8; 3];
@@ -48,8 +56,14 @@ struct VideoApp {
     pixels: Option<Pixels<'static>>,
     key_events: Vec<(winit::keyboard::KeyCode, bool)>,
     close_requested: bool,
-    /// RGBA staging buffer (320x200x4).
+    /// RGBA staging buffer for the native 720p presentation surface.
     rgba: Vec<u8>,
+    /// Decoded ImageGen-enhanced opening-menu resource.
+    opening_menu_hd: Option<Vec<u8>>,
+    /// Original indexed menu background, used as an overlay mask so the live
+    /// engine-rendered labels remain interactive over the enhanced artwork.
+    enhanced_baseline: Option<Vec<u8>>,
+    enhanced_target_palette: Option<[PalColor; 256]>,
 }
 
 impl ApplicationHandler for VideoApp {
@@ -60,13 +74,13 @@ impl ApplicationHandler for VideoApp {
         let attrs = Window::default_attributes()
             .with_title("rustpal — 仙劍奇俠傳")
             .with_inner_size(winit::dpi::LogicalSize::new(
-                (SCREEN_W as u32 * WINDOW_SCALE) as f64,
-                (SCREEN_H as u32 * WINDOW_SCALE) as f64,
+                DISPLAY_W as f64,
+                DISPLAY_H as f64,
             ));
         let window = Arc::new(event_loop.create_window(attrs).expect("create game window"));
         let size = window.inner_size();
         let texture = SurfaceTexture::new(size.width, size.height, window.clone());
-        let pixels = Pixels::new(SCREEN_W as u32, SCREEN_H as u32, texture)
+        let pixels = Pixels::new(DISPLAY_W as u32, DISPLAY_H as u32, texture)
             .expect("create pixel framebuffer");
         self.window = Some(window);
         self.pixels = Some(pixels);
@@ -113,7 +127,10 @@ impl Video {
                 pixels: None,
                 key_events: Vec::new(),
                 close_requested: false,
-                rgba: vec![0; SCREEN_W * SCREEN_H * 4],
+                rgba: vec![0; DISPLAY_W * DISPLAY_H * 4],
+                opening_menu_hd: decode_opening_menu_hd().ok(),
+                enhanced_baseline: None,
+                enhanced_target_palette: None,
             },
         })
     }
@@ -130,45 +147,139 @@ impl Video {
         let Some(pixels) = self.app.pixels.as_mut() else {
             return;
         };
-        let rgba = &mut self.app.rgba;
-        match shake {
-            None => {
-                for (i, &px) in surf.pixels.iter().enumerate() {
-                    let c = palette[px as usize];
-                    let o = i * 4;
-                    rgba[o] = c[0];
-                    rgba[o + 1] = c[1];
-                    rgba[o + 2] = c[2];
-                    rgba[o + 3] = 0xff;
-                }
-            }
-            Some((time, level)) => {
-                // VIDEO_UpdateScreen shake: shift the image up or down by
-                // `level` lines depending on frame parity; blank the rest.
-                rgba.fill(0);
-                let level = level as usize % SCREEN_H;
-                let h = SCREEN_H - level;
-                let (src_y0, dst_y0) = if time & 1 != 0 {
-                    (level, 0)
-                } else {
-                    (0, level)
-                };
-                for y in 0..h {
-                    let sy = src_y0 + y;
-                    let dy = dst_y0 + y;
-                    for x in 0..SCREEN_W {
-                        let c = palette[surf.pixels[sy * SCREEN_W + x] as usize];
-                        let o = (dy * SCREEN_W + x) * 4;
-                        rgba[o] = c[0];
-                        rgba[o + 1] = c[1];
-                        rgba[o + 2] = c[2];
-                        rgba[o + 3] = 0xff;
-                    }
+        render_720p(
+            surf,
+            palette,
+            shake,
+            self.app.opening_menu_hd.as_deref(),
+            self.app.enhanced_baseline.as_deref(),
+            self.app.enhanced_target_palette.as_ref(),
+            &mut self.app.rgba,
+        );
+        let rgba = &self.app.rgba;
+        pixels.frame_mut().copy_from_slice(rgba);
+        let _ = pixels.render();
+    }
+
+    fn enable_enhanced_opening_menu(&mut self, baseline: Vec<u8>, target_palette: [PalColor; 256]) {
+        if self.app.opening_menu_hd.is_some() {
+            self.app.enhanced_baseline = Some(baseline);
+            self.app.enhanced_target_palette = Some(target_palette);
+        }
+    }
+
+    fn disable_enhanced_background(&mut self) {
+        self.app.enhanced_baseline = None;
+        self.app.enhanced_target_palette = None;
+    }
+}
+
+fn decode_opening_menu_hd() -> io::Result<Vec<u8>> {
+    let decoder = png::Decoder::new(Cursor::new(OPENING_MENU_HD_PNG));
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| io::Error::other(format!("decode enhanced menu PNG: {e}")))?;
+    let mut buf = vec![0; reader.output_buffer_size().unwrap_or(0)];
+    let info = reader
+        .next_frame(&mut buf)
+        .map_err(|e| io::Error::other(format!("read enhanced menu PNG: {e}")))?;
+    if info.width as usize != DISPLAY_W || info.height as usize != DISPLAY_H {
+        return Err(io::Error::other(format!(
+            "enhanced menu must be {DISPLAY_W}x{DISPLAY_H}, got {}x{}",
+            info.width, info.height
+        )));
+    }
+    let bytes = &buf[..info.buffer_size()];
+    match info.color_type {
+        png::ColorType::Rgb => Ok(bytes.to_vec()),
+        png::ColorType::Rgba => Ok(bytes
+            .chunks_exact(4)
+            .flat_map(|px| [px[0], px[1], px[2]])
+            .collect()),
+        other => Err(io::Error::other(format!(
+            "enhanced menu must be RGB/RGBA, got {other:?}"
+        ))),
+    }
+}
+
+fn render_720p(
+    surf: &Surface,
+    palette: &[PalColor; 256],
+    shake: Option<(u16, u16)>,
+    enhanced_rgb: Option<&[u8]>,
+    enhanced_baseline: Option<&[u8]>,
+    enhanced_target_palette: Option<&[PalColor; 256]>,
+    out: &mut [u8],
+) {
+    assert_eq!(out.len(), DISPLAY_W * DISPLAY_H * 4);
+    let enhanced = enhanced_rgb
+        .zip(enhanced_baseline)
+        .zip(enhanced_target_palette)
+        .filter(|((rgb, baseline), _)| {
+            rgb.len() == DISPLAY_W * DISPLAY_H * 3 && baseline.len() == SCREEN_W * SCREEN_H
+        });
+
+    if let Some(((rgb, baseline), target_palette)) = enhanced {
+        let current_sum: u64 = palette.iter().flatten().map(|&v| u64::from(v)).sum();
+        let target_sum: u64 = target_palette.iter().flatten().map(|&v| u64::from(v)).sum();
+        let fade = current_sum
+            .saturating_mul(255)
+            .checked_div(target_sum)
+            .unwrap_or(255)
+            .min(255) as u16;
+        for (src, dst) in rgb.chunks_exact(3).zip(out.chunks_exact_mut(4)) {
+            dst[0] = (u16::from(src[0]) * fade / 255) as u8;
+            dst[1] = (u16::from(src[1]) * fade / 255) as u8;
+            dst[2] = (u16::from(src[2]) * fade / 255) as u8;
+            dst[3] = 0xff;
+        }
+
+        // Composite only pixels changed from the packed background. This
+        // keeps menu labels and their selection colors live and crisp while
+        // the ImageGen resource supplies the high-resolution base artwork.
+        for y in 0..DISPLAY_H {
+            let sy = y * SCREEN_H / DISPLAY_H;
+            for x in 0..DISPLAY_W {
+                let sx = x * SCREEN_W / DISPLAY_W;
+                let source = sy * SCREEN_W + sx;
+                if surf.pixels[source] != baseline[source] {
+                    let color = palette[surf.pixels[source] as usize];
+                    let dst = (y * DISPLAY_W + x) * 4;
+                    out[dst..dst + 3].copy_from_slice(&color);
                 }
             }
         }
-        pixels.frame_mut().copy_from_slice(rgba);
-        let _ = pixels.render();
+        return;
+    }
+
+    out.fill(0);
+    for pixel in out.chunks_exact_mut(4) {
+        pixel[3] = 0xff;
+    }
+    let (src_y0, dst_y0, visible_h) = match shake {
+        None => (0, 0, SCREEN_H),
+        Some((time, level)) => {
+            let level = level as usize % SCREEN_H;
+            if time & 1 != 0 {
+                (level, 0, SCREEN_H - level)
+            } else {
+                (0, level, SCREEN_H - level)
+            }
+        }
+    };
+    for y in 0..DISPLAY_H {
+        let logical_y = y * SCREEN_H / DISPLAY_H;
+        if logical_y < dst_y0 || logical_y >= dst_y0 + visible_h {
+            continue;
+        }
+        let sy = src_y0 + logical_y - dst_y0;
+        for x in 0..VIEW_W {
+            let sx = x * SCREEN_W / VIEW_W;
+            let color = palette[surf.pixels[sy * SCREEN_W + sx] as usize];
+            let dst = (y * DISPLAY_W + VIEW_X + x) * 4;
+            out[dst..dst + 3].copy_from_slice(&color);
+            out[dst + 3] = 0xff;
+        }
     }
 }
 
@@ -339,6 +450,21 @@ impl Engine {
         };
         if let Some(video) = self.video.as_mut() {
             video.present(&self.screen, &self.palette, shake);
+        }
+    }
+
+    /// Use the generated 720p opening artwork as the current presentation
+    /// background while retaining the original indexed surface as a mask for
+    /// live menu text.
+    pub(crate) fn enable_enhanced_opening_menu(&mut self, target_palette: [PalColor; 256]) {
+        if let Some(video) = self.video.as_mut() {
+            video.enable_enhanced_opening_menu(self.screen.pixels.clone(), target_palette);
+        }
+    }
+
+    pub(crate) fn disable_enhanced_background(&mut self) {
+        if let Some(video) = self.video.as_mut() {
+            video.disable_enhanced_background();
         }
     }
 
@@ -925,5 +1051,60 @@ impl Engine {
             }
         }
         self.video_update();
+    }
+}
+
+#[cfg(test)]
+mod video_tests {
+    use super::*;
+
+    #[test]
+    fn enhanced_menu_resource_is_exactly_720p_rgb() {
+        let rgb = decode_opening_menu_hd().expect("embedded enhanced menu PNG");
+        assert_eq!(rgb.len(), DISPLAY_W * DISPLAY_H * 3);
+        assert!(rgb.iter().any(|&channel| channel != 0));
+    }
+
+    #[test]
+    fn standard_frame_is_aspect_correct_and_pillarboxed() {
+        let mut surf = Surface::screen();
+        surf.clear(1);
+        let mut palette = [[0u8; 3]; 256];
+        palette[1] = [200, 40, 20];
+        let mut out = vec![0; DISPLAY_W * DISPLAY_H * 4];
+        render_720p(&surf, &palette, None, None, None, None, &mut out);
+
+        assert_eq!(&out[..4], &[0, 0, 0, 255]);
+        let first = VIEW_X * 4;
+        assert_eq!(&out[first..first + 4], &[200, 40, 20, 255]);
+        let last = (VIEW_X + VIEW_W - 1) * 4;
+        assert_eq!(&out[last..last + 4], &[200, 40, 20, 255]);
+        let right_bar = (VIEW_X + VIEW_W) * 4;
+        assert_eq!(&out[right_bar..right_bar + 4], &[0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn enhanced_background_keeps_live_indexed_overlays() {
+        let mut surf = Surface::screen();
+        let baseline = surf.pixels.clone();
+        surf.put_pixel(160, 100, 1);
+        let mut palette = [[0u8; 3]; 256];
+        palette[1] = [255, 32, 16];
+        let enhanced = vec![80; DISPLAY_W * DISPLAY_H * 3];
+        let mut out = vec![0; DISPLAY_W * DISPLAY_H * 4];
+
+        render_720p(
+            &surf,
+            &palette,
+            None,
+            Some(&enhanced),
+            Some(&baseline),
+            Some(&palette),
+            &mut out,
+        );
+
+        let center = (360 * DISPLAY_W + 640) * 4;
+        assert_eq!(&out[center..center + 4], &[255, 32, 16, 255]);
+        assert_eq!(&out[..4], &[80, 80, 80, 255]);
     }
 }
