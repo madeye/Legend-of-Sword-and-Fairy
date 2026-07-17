@@ -2131,10 +2131,7 @@ mod tests {
     use crate::battle::ActionQueue;
 
     fn globals() -> Globals {
-        std::env::set_var(
-            "PAL_DATA_DIR",
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../pal"),
-        );
+        std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
         Globals::init(crate::data::DataDir::new().unwrap()).unwrap()
     }
 

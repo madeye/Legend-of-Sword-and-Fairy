@@ -434,10 +434,7 @@ mod tests {
     use super::*;
 
     fn engine() -> Engine {
-        std::env::set_var(
-            "PAL_DATA_DIR",
-            concat!(env!("CARGO_MANIFEST_DIR"), "/../pal"),
-        );
+        std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
         let mut e = Engine::new(true).expect("headless engine");
         e.globals.load_default_game().expect("default game");
         e.globals.max_party_member_index = 0;
