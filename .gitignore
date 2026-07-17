@@ -1,4 +1,5 @@
 stderr.txt
 stdout.txt
 reference/
-rustpal/target/err.log
+rustpal/target/
+err.log
