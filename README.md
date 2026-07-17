@@ -20,9 +20,33 @@ cargo run --release
 
 操作：方向键移动，空格/回车 调查·确认，Esc 菜单；战斗中 R 连续攻击、A 自动、D 防御、E 物品、W 投掷、Q 逃跑、F 仙术、S 状态。
 
+#### 浏览器版 / Running in the browser (wasm)
+
+**在线试玩 / Play online**: <https://madeye.github.io/Legend-of-Sword-and-Fairy/>
+（由 GitHub Actions 自动构建部署，见 `.github/workflows/pages.yml`）
+
+整个同步引擎原样运行在 Web Worker 中：画面输出到 canvas，键盘输入与
+音频采样通过 SharedArrayBuffer 环形缓冲传递（音乐由 AudioWorklet 播放），
+存档保存在 localStorage。
+
+```shell
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli
+./web/build.sh          # 构建 wasm 包到 web/pkg/
+python3 web/serve.py    # 本地服务器（带 SharedArrayBuffer 所需的 COOP/COEP 头）
+# 打开 http://127.0.0.1:8080/web/
+```
+
+注意：浏览器要求页面有一次点击/按键后才会开始播放声音。SharedArrayBuffer
+需要跨源隔离：自建服务器请设置 `Cross-Origin-Opener-Policy: same-origin` 和
+`Cross-Origin-Embedder-Policy: require-corp` 响应头；无法自定义响应头的
+静态托管（如 GitHub Pages）由页面内置的 `coi-serviceworker.js` 代为注入
+（首次访问会自动刷新一次）。
+
 #### 支持平台
 
-macOS / Linux / Windows（winit + pixels 渲染，cpal 音频）。
+macOS / Linux / Windows（winit + pixels 渲染，cpal 音频），以及现代浏览器
+（wasm32 + Web Worker + SharedArrayBuffer + AudioWorklet）。
 
 #### 架构 / Architecture
 

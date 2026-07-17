@@ -2,5 +2,6 @@ stderr.txt
 stdout.txt
 reference/
 /target/
+/web/pkg/
 err.log
 .claude/

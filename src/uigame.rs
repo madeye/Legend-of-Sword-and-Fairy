@@ -131,9 +131,19 @@ impl Engine {
     fn play_avi(&mut self, _filename: &str) {}
 
     /// Read the "saved times" counter from a save slot file (GetSavedTimes).
+    #[cfg(not(target_arch = "wasm32"))]
     fn get_saved_times(&self, slot: i32) -> u16 {
         let path = self.globals.save_dir.join(format!("{slot}.rpg"));
         match std::fs::read(path) {
+            Ok(buf) if buf.len() >= 2 => u16::from_le_bytes([buf[0], buf[1]]),
+            _ => 0,
+        }
+    }
+
+    /// Web: saves live in the PAL_FILES map, keyed like the DOS files.
+    #[cfg(target_arch = "wasm32")]
+    fn get_saved_times(&self, slot: i32) -> u16 {
+        match self.globals.data_dir.read_file(&format!("{slot}.rpg")) {
             Ok(buf) if buf.len() >= 2 => u16::from_le_bytes([buf[0], buf[1]]),
             _ => 0,
         }
@@ -728,7 +738,9 @@ impl Engine {
                     break;
                 }
                 self.input.clear_key_state();
-                self.process_event();
+                // Wait AFTER clearing so presses accumulated while sleeping
+                // survive to the checks below (PAL_ReadMenu ordering).
+                self.delay(1);
                 if self.quit_requested {
                     player = MENUITEM_VALUE_CANCELLED;
                     break;
@@ -770,7 +782,6 @@ impl Engine {
                     player += 1;
                     break;
                 }
-                self.delay(1);
             }
         }
     }

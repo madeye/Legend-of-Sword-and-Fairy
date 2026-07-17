@@ -655,6 +655,9 @@ impl Engine {
             return None;
         }
 
+        // PAL_ReadMenu: the wait sits BETWEEN clear_key_state and the key
+        // checks so presses arriving while we sleep survive to the checks.
+        let mut deadline = self.ticks();
         loop {
             self.input.clear_key_state();
 
@@ -666,6 +669,8 @@ impl Engine {
             }
 
             self.process_event();
+            self.delay_until(deadline);
+            deadline = self.ticks() + 50;
             if self.quit_requested {
                 return None;
             }
@@ -739,8 +744,6 @@ impl Engine {
                 );
                 return Some(items[current].value);
             }
-
-            self.delay(50);
         }
 
         None

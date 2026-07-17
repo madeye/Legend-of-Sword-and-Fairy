@@ -7,17 +7,32 @@
 //! extend `Engine` with their own `impl` blocks.
 #![allow(dead_code)] // used incrementally as engine bring-up proceeds
 
-use std::io::{self, Cursor};
+use std::io;
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::Cursor;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
+use web_time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
 use pixels::{Pixels, SurfaceTexture};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::application::ApplicationHandler;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event::{ElementState, WindowEvent};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::keyboard::PhysicalKey;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::platform::pump_events::EventLoopExtPumpEvents;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::window::{Window, WindowId};
+
+#[cfg(target_arch = "wasm32")]
+use crate::web::Video;
 
 use crate::data::DataDir;
 use crate::font::Font;
@@ -35,22 +50,84 @@ pub const BATTLE_FRAME_TIME: u64 = 40;
 
 /// Native presentation size. The original 8:5 framebuffer is rendered into a
 /// 1152x720 viewport with narrow pillarboxes, preserving its geometry instead
-/// of stretching it to 16:9.
+/// of stretching it to 16:9. (The web build presents the raw 320x200 frame
+/// and lets CSS scale it.)
+#[cfg(not(target_arch = "wasm32"))]
 pub const DISPLAY_W: usize = 1280;
+#[cfg(not(target_arch = "wasm32"))]
 pub const DISPLAY_H: usize = 720;
+#[cfg(not(target_arch = "wasm32"))]
 const VIEW_W: usize = 1152;
+#[cfg(not(target_arch = "wasm32"))]
 const VIEW_X: usize = (DISPLAY_W - VIEW_W) / 2;
 
+#[cfg(not(target_arch = "wasm32"))]
 const OPENING_MENU_HD_PNG: &[u8] = include_bytes!("../resources/hd/opening-menu-720p.png");
 
 /// One entry of the hardware palette.
 pub type PalColor = [u8; 3];
+
+/// UTIL_Delay's underlying sleep. On the web the engine runs inside a Web
+/// Worker where blocking is allowed but `std::thread::sleep` panics, so it
+/// parks on `Atomics.wait` instead.
+pub(crate) fn sleep_ms(ms: u64) {
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::sleep(std::time::Duration::from_millis(ms));
+    #[cfg(target_arch = "wasm32")]
+    crate::web::sleep_ms(ms);
+}
+
+/// Convert an indexed surface + palette to RGBA, applying the
+/// VIDEO_UpdateScreen shake effect (shift up/down by `level` lines depending
+/// on frame parity; blank the rest). Shared by the native and web backends.
+pub(crate) fn render_rgba(
+    surf: &Surface,
+    palette: &[PalColor; 256],
+    shake: Option<(u16, u16)>,
+    rgba: &mut [u8],
+) {
+    match shake {
+        None => {
+            for (i, &px) in surf.pixels.iter().enumerate() {
+                let c = palette[px as usize];
+                let o = i * 4;
+                rgba[o] = c[0];
+                rgba[o + 1] = c[1];
+                rgba[o + 2] = c[2];
+                rgba[o + 3] = 0xff;
+            }
+        }
+        Some((time, level)) => {
+            rgba.fill(0);
+            let level = level as usize % SCREEN_H;
+            let h = SCREEN_H - level;
+            let (src_y0, dst_y0) = if time & 1 != 0 {
+                (level, 0)
+            } else {
+                (0, level)
+            };
+            for y in 0..h {
+                let sy = src_y0 + y;
+                let dy = dst_y0 + y;
+                for x in 0..SCREEN_W {
+                    let c = palette[surf.pixels[sy * SCREEN_W + x] as usize];
+                    let o = (dy * SCREEN_W + x) * 4;
+                    rgba[o] = c[0];
+                    rgba[o + 1] = c[1];
+                    rgba[o + 2] = c[2];
+                    rgba[o + 3] = 0xff;
+                }
+            }
+        }
+    }
+}
 
 // ===========================================================================
 // Video shell (video.c): winit window + pixels framebuffer, pumped
 // synchronously so the imperative game flow of the original engine works.
 // ===========================================================================
 
+#[cfg(not(target_arch = "wasm32"))]
 struct VideoApp {
     window: Option<Arc<Window>>,
     pixels: Option<Pixels<'static>>,
@@ -66,6 +143,7 @@ struct VideoApp {
     enhanced_target_palette: Option<[PalColor; 256]>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ApplicationHandler for VideoApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -111,11 +189,13 @@ impl ApplicationHandler for VideoApp {
 }
 
 /// The window + framebuffer (None in headless mode, e.g. tests).
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Video {
     event_loop: EventLoop<()>,
     app: VideoApp,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Video {
     pub fn new() -> io::Result<Video> {
         let event_loop =
@@ -172,8 +252,14 @@ impl Video {
         self.app.enhanced_baseline = None;
         self.app.enhanced_target_palette = None;
     }
+
+    /// Whether the user asked to close the window.
+    fn close_requested(&self) -> bool {
+        self.app.close_requested
+    }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn decode_opening_menu_hd() -> io::Result<Vec<u8>> {
     let decoder = png::Decoder::new(Cursor::new(OPENING_MENU_HD_PNG));
     let mut reader = decoder
@@ -202,6 +288,7 @@ fn decode_opening_menu_hd() -> io::Result<Vec<u8>> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn render_720p(
     surf: &Surface,
     palette: &[PalColor; 256],
@@ -408,9 +495,14 @@ impl Engine {
             for (code, pressed) in video.pump() {
                 self.input.handle_key_event(code, pressed);
             }
-            if video.app.close_requested {
+            if video.close_requested() {
                 self.quit_requested = true;
             }
+        }
+        // Keep the web audio ring topped up (no-op natively: cpal renders
+        // in its own callback thread).
+        if let Some(audio) = self.audio.as_ref() {
+            audio.pump();
         }
         let now = self.ticks();
         self.input.update_keyboard_state(now);
@@ -424,7 +516,7 @@ impl Engine {
             if self.ticks() >= end {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(5.min(end - self.ticks())));
+            sleep_ms(5.min(end - self.ticks()));
         }
     }
 
@@ -435,7 +527,7 @@ impl Engine {
         self.process_event();
         while self.ticks() < deadline {
             self.process_event();
-            std::thread::sleep(Duration::from_millis(5));
+            sleep_ms(5);
         }
     }
 
