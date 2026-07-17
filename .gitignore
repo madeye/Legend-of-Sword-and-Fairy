@@ -3,3 +3,4 @@ stdout.txt
 reference/
 rustpal/target/
 err.log
+.claude/
