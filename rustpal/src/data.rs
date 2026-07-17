@@ -21,6 +21,7 @@ impl DataDir {
         }
         if let Ok(cwd) = std::env::current_dir() {
             candidates.push(cwd.join("pal"));
+            candidates.push(cwd.join("../pal"));
             candidates.push(cwd);
         }
         if let Ok(exe) = std::env::current_exe() {

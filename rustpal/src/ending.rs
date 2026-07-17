@@ -2,53 +2,9 @@
 //! ending.c, DOS paths — no AVI / CD audio).
 #![allow(dead_code)] // used incrementally as engine bring-up proceeds
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use crate::game_loop::Engine;
 use crate::input::{KEY_MENU, KEY_SEARCH};
 use crate::surface::{self, copy_rows, Surface, SCREEN_H, SCREEN_W};
-
-/// Local port of PAL_ApplyWave (scene.c) used by the ending helpers.
-/// XXX consolidate with scene.rs's version once the scene port lands.
-fn apply_wave(engine: &mut Engine) {
-    static INDEX: AtomicUsize = AtomicUsize::new(0);
-
-    engine.globals.screen_wave = engine
-        .globals
-        .screen_wave
-        .wrapping_add(engine.globals.wave_progression as u16);
-
-    if engine.globals.screen_wave == 0 || engine.globals.screen_wave >= 256 {
-        engine.globals.screen_wave = 0;
-        engine.globals.wave_progression = 0;
-        return;
-    }
-
-    let mut wave = [0usize; 32];
-    let mut a = 0i32;
-    let mut b = 60 + 8;
-    for i in 0..16 {
-        b -= 8;
-        a += b;
-        wave[i] = (a * engine.globals.screen_wave as i32 / 256) as usize;
-        wave[i + 16] = SCREEN_W - wave[i];
-    }
-
-    let mut idx = INDEX.load(Ordering::Relaxed);
-    let start = idx;
-    let mut buf = [0u8; SCREEN_W];
-    for y in 0..SCREEN_H {
-        let shift = wave[idx];
-        if shift > 0 && shift < SCREEN_W {
-            let line = &mut engine.screen.pixels[y * SCREEN_W..(y + 1) * SCREEN_W];
-            buf[..shift].copy_from_slice(&line[..shift]);
-            line.copy_within(shift..SCREEN_W, 0);
-            line[SCREEN_W - shift..].copy_from_slice(&buf[..shift]);
-        }
-        idx = (idx + 1) % 32;
-    }
-    INDEX.store((start + 1) % 32, Ordering::Relaxed);
-}
 
 /// Local port of PAL_WaitForKey (script.c) for the ending flow.
 /// XXX consolidate with script.rs's version once the script port lands.
@@ -178,7 +134,7 @@ impl Engine {
                 copy_rows(&p.pixels, 0, &mut self.screen, 200 - i, i);
             }
 
-            apply_wave(self);
+            self.apply_wave();
 
             if let Some(sp) = sprite.as_ref() {
                 let count = surface::sprite_frame_count(sp).max(1);
@@ -234,7 +190,7 @@ impl Engine {
             copy_rows(&lower.pixels, 0, &mut self.screen, i / 2, 200 - i / 2);
             copy_rows(&upper.pixels, 200 - i / 2, &mut self.screen, 0, i / 2);
 
-            apply_wave(self);
+            self.apply_wave();
 
             // The beast.
             if let Some(f) = surface::sprite_frame(&beast, 0) {
