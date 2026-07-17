@@ -197,6 +197,14 @@ pub struct Engine {
     pub shake_time: u16,
     pub shake_level: u16,
 
+    /// Audio mixer (None when no output device / headless).
+    pub audio: Option<crate::audio::Mixer>,
+    /// MUS.MKF (RIX songs) and VOC.MKF (sound effects).
+    mus: Mkf,
+    voc: Mkf,
+    /// Currently playing music number (AUDIO layer bookkeeping).
+    pub cur_music: i32,
+
     pub input: InputState,
     video: Option<Video>,
     start: Instant,
@@ -216,10 +224,17 @@ impl Engine {
     pub fn new(headless: bool) -> io::Result<Engine> {
         let data_dir = DataDir::new()?;
         let pat = data_dir.mkf("pat.mkf")?;
+        let mus = data_dir.mkf("mus.mkf")?;
+        let voc = data_dir.mkf("voc.mkf")?;
         let texts = Texts::load(&data_dir)?;
         let font = Font::load(&data_dir)?;
         let globals = Globals::init(data_dir)?;
         let video = if headless { None } else { Some(Video::new()?) };
+        let audio = if headless {
+            None
+        } else {
+            crate::audio::Mixer::new()
+        };
 
         let mut engine = Engine {
             globals,
@@ -232,6 +247,10 @@ impl Engine {
             pat,
             shake_time: 0,
             shake_level: 0,
+            audio,
+            mus,
+            voc,
+            cur_music: 0,
             input: InputState::new(),
             video,
             start: Instant::now(),
@@ -321,16 +340,40 @@ impl Engine {
         }
     }
 
-    /// AUDIO_PlayMusic. BRING-UP STUB — wired to the RIX player when the
-    /// audio stack lands; music number 0 stops music.
-    pub fn play_music(&mut self, _num: i32, _looping: bool, _fade_time: f32) {
-        // STUB
+    /// AUDIO_PlayMusic: play RIX song `num` from MUS.MKF; num <= 0 stops
+    /// the music.
+    pub fn play_music(&mut self, num: i32, _looping: bool, fade_time: f32) {
+        self.cur_music = num;
+        let Some(audio) = self.audio.as_ref() else {
+            return;
+        };
+        if num <= 0 {
+            audio.stop_music(fade_time);
+            return;
+        }
+        let Ok(chunk) = self.mus.chunk(num as usize) else {
+            return;
+        };
+        if let Some(rix) = crate::rix::RixPlayer::new(chunk, audio.out_rate()) {
+            audio.play_music(rix, fade_time);
+        }
     }
 
-    /// AUDIO_PlaySound / SOUND_Play. Negative or zero numbers are ignored
-    /// exactly like the C code. BRING-UP STUB until the audio stack lands.
-    pub fn play_sound(&mut self, _num: i32) {
-        // STUB
+    /// AUDIO_PlaySound: play VOC sound `num`; non-positive numbers are
+    /// ignored like the C code.
+    pub fn play_sound(&mut self, num: i32) {
+        let Some(audio) = self.audio.as_ref() else {
+            return;
+        };
+        if num <= 0 {
+            return;
+        }
+        let Ok(chunk) = self.voc.chunk(num as usize) else {
+            return;
+        };
+        if let Some(voc) = crate::voc::decode_voc(chunk) {
+            audio.play_sound(voc);
+        }
     }
 
     /// VIDEO_ShakeScreen.
