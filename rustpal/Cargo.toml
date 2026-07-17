@@ -1,0 +1,12 @@
+[package]
+name = "rustpal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winit = "0.30"
+pixels = "0.15"
+cpal = "0.15"
+
+[profile.release]
+opt-level = 3
