@@ -14,7 +14,6 @@ self.onmessage = async (e) => {
     self.PAL_AUDIO = audio;
     self.PAL_AUDIO_RATE = audioRate;
   }
-  console.log(`worker: audio=${audio ? audio.byteLength : "none"} rate=${audioRate}`);
   try {
     await wasm_bindgen({ module_or_path: "pkg/rustpal_bg.wasm" });
     postMessage("engine loaded — booting…");

@@ -33,31 +33,27 @@ async function boot() {
     return;
   }
 
-  // Fetch all game data up front (~13 MB).
-  let loaded = 0;
-  const files = {};
-  await Promise.all(FILES.map(async (name) => {
-    const resp = await fetch(`../pal/${name}`);
-    if (!resp.ok) throw new Error(`fetch ${name}: HTTP ${resp.status}`);
-    files[name] = new Uint8Array(await resp.arrayBuffer());
-    status.textContent = `loading game data… ${++loaded}/${FILES.length}`;
-  }));
-
-  // Seed saved games (slots 1-5) from localStorage into the file map.
-  for (let slot = 1; slot <= 5; slot++) {
-    const b64 = localStorage.getItem(`pal-save-${slot}`);
-    if (!b64) continue;
-    const bin = atob(b64);
-    const u8 = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    files[`${slot}.RPG`] = u8;
-  }
-
   // Key-event ring buffer: [0] = write count, [1] = engine read count
-  // (debug), then RING_CAPACITY slots.
+  // (debug), then RING_CAPACITY slots. Created (and listeners attached)
+  // before the data fetch so keys pressed while loading aren't lost.
   const inputSab = new SharedArrayBuffer(4 * (2 + RING_CAPACITY));
   const input = new Int32Array(inputSab);
   window.__palInput = input; // debug handle
+
+  const pushKey = (code, pressed) => {
+    const id = KEY_CODES.indexOf(KEY_ALIASES[code] ?? code);
+    if (id < 0) return false;
+    const seq = Atomics.load(input, 0);
+    Atomics.store(input, 2 + (seq % RING_CAPACITY), (id << 1) | (pressed ? 1 : 0));
+    Atomics.store(input, 0, seq + 1);
+    return true;
+  };
+  window.addEventListener("keydown", (e) => {
+    if (pushKey(e.code, true)) e.preventDefault();
+  });
+  window.addEventListener("keyup", (e) => {
+    if (pushKey(e.code, false)) e.preventDefault();
+  });
 
   // Audio: an AudioWorklet drains a sample ring the engine worker fills.
   // 8-byte header (write/read counters) + 16384 stereo f32 frames.
@@ -86,6 +82,26 @@ async function boot() {
   window.addEventListener("keydown", resumeAudio);
   window.addEventListener("click", resumeAudio);
 
+  // Fetch all game data up front (~13 MB).
+  let loaded = 0;
+  const files = {};
+  await Promise.all(FILES.map(async (name) => {
+    const resp = await fetch(`../pal/${name}`);
+    if (!resp.ok) throw new Error(`fetch ${name}: HTTP ${resp.status}`);
+    files[name] = new Uint8Array(await resp.arrayBuffer());
+    status.textContent = `loading game data… ${++loaded}/${FILES.length}`;
+  }));
+
+  // Seed saved games (slots 1-5) from localStorage into the file map.
+  for (let slot = 1; slot <= 5; slot++) {
+    const b64 = localStorage.getItem(`pal-save-${slot}`);
+    if (!b64) continue;
+    const bin = atob(b64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    files[`${slot}.RPG`] = u8;
+  }
+
   const worker = new Worker("worker.js");
   worker.onmessage = (e) => {
     if (e.data && e.data.byteLength === 320 * 200 * 4) {
@@ -108,21 +124,6 @@ async function boot() {
   worker.postMessage({ files, input: inputSab, audio: audioSab, audioRate },
     Object.values(files).map((u8) => u8.buffer));
   status.textContent = "starting engine…";
-
-  const pushKey = (code, pressed) => {
-    const id = KEY_CODES.indexOf(KEY_ALIASES[code] ?? code);
-    if (id < 0) return false;
-    const seq = Atomics.load(input, 0);
-    Atomics.store(input, 2 + (seq % RING_CAPACITY), (id << 1) | (pressed ? 1 : 0));
-    Atomics.store(input, 0, seq + 1);
-    return true;
-  };
-  window.addEventListener("keydown", (e) => {
-    if (pushKey(e.code, true)) e.preventDefault();
-  });
-  window.addEventListener("keyup", (e) => {
-    if (pushKey(e.code, false)) e.preventDefault();
-  });
 }
 
 boot().catch((e) => { status.textContent = String(e); });

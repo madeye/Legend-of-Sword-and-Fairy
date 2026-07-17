@@ -154,12 +154,17 @@ pub fn sleep_ms(ms: u64) {
 #[wasm_bindgen]
 pub fn web_run() {
     std::panic::set_hook(Box::new(|info| {
-        web_sys::console::error_1(&format!("rustpal panic: {info}").into());
+        let msg = format!("rustpal panic: {info}");
+        web_sys::console::error_1(&msg.as_str().into());
+        // Also surface it on the page's status line.
+        let _ = worker_scope().post_message(&msg.into());
     }));
     match crate::game_loop::Engine::new(false) {
         Ok(mut engine) => engine.run(),
         Err(e) => {
-            web_sys::console::error_1(&format!("rustpal: failed to start: {e}").into());
+            let msg = format!("rustpal: failed to start: {e}");
+            web_sys::console::error_1(&msg.as_str().into());
+            let _ = worker_scope().post_message(&msg.into());
         }
     }
 }
