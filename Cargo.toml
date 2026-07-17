@@ -7,6 +7,7 @@ edition = "2021"
 winit = "0.30"
 pixels = "0.15"
 cpal = "0.15"
+png = "0.18"
 
 [profile.release]
 opt-level = 3
