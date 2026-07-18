@@ -34,6 +34,12 @@ if (presenter.gl) {
     presenter.setFilter(filterSel.value);
     filterSel.blur(); // give the keyboard back to the game
   });
+  // The NN upscaler degrades to xbr when WebGPU/shader-f16 is unavailable;
+  // keep the dropdown in sync and gray the option out.
+  presenter.onFilterChange = (f) => { filterSel.value = f; };
+  presenter.onNNFailed = () => {
+    filterSel.querySelector('option[value="nn"]').disabled = true;
+  };
 } else {
   document.getElementById("filterbar").hidden = true;
 }
