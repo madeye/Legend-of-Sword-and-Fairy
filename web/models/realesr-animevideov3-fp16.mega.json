@@ -1,0 +1,132 @@
+{
+ "layers": [
+  {
+   "matBase": 0,
+   "OV": 16,
+   "IV": 1,
+   "biasBase": 154944,
+   "slopeBase": 154960
+  },
+  {
+   "matBase": 144,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 154976,
+   "slopeBase": 154992
+  },
+  {
+   "matBase": 2448,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155008,
+   "slopeBase": 155024
+  },
+  {
+   "matBase": 4752,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155040,
+   "slopeBase": 155056
+  },
+  {
+   "matBase": 7056,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155072,
+   "slopeBase": 155088
+  },
+  {
+   "matBase": 9360,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155104,
+   "slopeBase": 155120
+  },
+  {
+   "matBase": 11664,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155136,
+   "slopeBase": 155152
+  },
+  {
+   "matBase": 13968,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155168,
+   "slopeBase": 155184
+  },
+  {
+   "matBase": 16272,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155200,
+   "slopeBase": 155216
+  },
+  {
+   "matBase": 18576,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155232,
+   "slopeBase": 155248
+  },
+  {
+   "matBase": 20880,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155264,
+   "slopeBase": 155280
+  },
+  {
+   "matBase": 23184,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155296,
+   "slopeBase": 155312
+  },
+  {
+   "matBase": 25488,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155328,
+   "slopeBase": 155344
+  },
+  {
+   "matBase": 27792,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155360,
+   "slopeBase": 155376
+  },
+  {
+   "matBase": 30096,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155392,
+   "slopeBase": 155408
+  },
+  {
+   "matBase": 32400,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155424,
+   "slopeBase": 155440
+  },
+  {
+   "matBase": 34704,
+   "OV": 16,
+   "IV": 16,
+   "biasBase": 155456,
+   "slopeBase": 155472
+  },
+  {
+   "matBase": 37008,
+   "OV": 12,
+   "IV": 16,
+   "biasBase": 155488,
+   "slopeBase": 0
+  }
+ ],
+ "totalMats": 38736,
+ "bytes": 1244000
+}

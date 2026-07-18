@@ -95,6 +95,7 @@
 <div id="sound" hidden>🔇 點擊畫面開啟聲音 / tap to enable sound</div>
 <div id="filterbar"><label for="filter">畫質增強:</label>
   <select id="filter">
+    <option value="nn">AI 高清（Real-ESRGAN）</option>
     <option value="xbr">平滑（xBR）</option>
     <option value="anime4k">動漫（Anime4K）</option>
     <option value="off">原始像素</option>
@@ -121,6 +122,7 @@
 <!-- Injects COOP/COEP headers via a service worker on hosts that can't set
      response headers (e.g. GitHub Pages); no-op when already isolated. -->
 <script src="coi-serviceworker.js"></script>
+<script src="nn-upscale.js"></script>
 <script src="upscale.js"></script>
 <script src="main.js"></script>
 </body>

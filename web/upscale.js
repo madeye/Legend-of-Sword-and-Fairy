@@ -4,9 +4,12 @@
 // scaling) when WebGL2 is unavailable.
 //
 // Filters:
+//   nn      — Real-ESRGAN (realesr-animevideov3) via the WebGPU mega kernel
+//             in nn-upscale.js. The default; needs WebGPU + shader-f16 and
+//             renders on its own canvas (this one already holds a WebGL2
+//             context). Falls back to xbr while loading or when unavailable.
 //   xbr     — Hyllian's xBR-lv2 edge-interpolating scaler (MIT, adapted
 //             from libretro/glsl-shaders xbr/shaders/xbr-lv2.glsl).
-//             Best fit for the 8-bit era sprites and dithered backgrounds.
 //   anime4k — bloc97's Anime4K 0.9 push algorithm (MIT): bilinear upscale,
 //             luma push, then gradient-guided line sharpening.
 //   off     — nearest-neighbor (original pixels).
@@ -305,7 +308,8 @@ void main() {
 class PalPresenter {
   constructor(canvas) {
     this.canvas = canvas;
-    this.filter = localStorage.getItem("pal-filter") || "xbr";
+    this.filter = localStorage.getItem("pal-filter") || "nn";
+    this.nnState = null; // null | "loading" | "ready" | "failed"
     this.lastFrame = null;
     this.needResize = true;
     this.gl = canvas.getContext("webgl2", { alpha: false, antialias: false });
@@ -403,7 +407,41 @@ class PalPresenter {
   setFilter(f) {
     this.filter = f;
     localStorage.setItem("pal-filter", f);
+    if (f !== "nn") this.showNN(false);
+    this.onFilterChange?.(f);
     if (this.lastFrame) this.present(this.lastFrame);
+  }
+
+  // Swap between the WebGL2 canvas and the NN upscaler's WebGPU canvas.
+  showNN(on) {
+    if (!this.nnCanvas) return;
+    this.canvas.hidden = on;
+    this.nnCanvas.hidden = !on;
+  }
+
+  // Lazy async init of the WebGPU upscaler; on any failure the filter
+  // permanently degrades to xbr for this session.
+  maybeInitNN() {
+    if (this.nnState) return;
+    this.nnState = "loading";
+    this.nnCanvas = document.createElement("canvas");
+    this.nnCanvas.style.imageRendering = "auto";
+    this.nnCanvas.hidden = true;
+    this.canvas.after(this.nnCanvas);
+    const fail = (e) => {
+      console.warn("nn upscaler unavailable:", e);
+      this.nnState = "failed";
+      this.nn = null;
+      this.showNN(false);
+      this.onNNFailed?.();
+      if (this.filter === "nn") this.setFilter("xbr");
+    };
+    NNUpscaler.create(this.nnCanvas).then((nn) => {
+      this.nn = nn;
+      nn.onDeviceLost = fail;
+      this.nnState = "ready";
+      if (this.filter === "nn" && this.lastFrame) this.present(this.lastFrame);
+    }).catch(fail);
   }
 
   resize() {
@@ -431,13 +469,24 @@ class PalPresenter {
           pixels.length), PAL_W, PAL_H), 0, 0);
       return;
     }
+    if (this.filter === "nn") {
+      this.maybeInitNN();
+      if (this.nnState === "ready") {
+        this.showNN(true);
+        this.nn.present(pixels);
+        return;
+      }
+      // Fall through to the GL path (as xbr) while the NN pipeline loads.
+    }
     if (this.dead) return;
     const gl = this.gl;
     if (this.needResize) this.resize();
     const w = this.canvas.width;
     const h = this.canvas.height;
 
-    const srcFilter = this.filter === "anime4k" ? gl.LINEAR : gl.NEAREST;
+    // "nn" reaches here only as the loading placeholder — render it as xbr.
+    const glFilter = this.filter === "nn" ? "xbr" : this.filter;
+    const srcFilter = glFilter === "anime4k" ? gl.LINEAR : gl.NEAREST;
     gl.bindTexture(gl.TEXTURE_2D, this.srcTex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, srcFilter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, srcFilter);
@@ -455,13 +504,13 @@ class PalPresenter {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
 
-    if (this.filter === "xbr") {
+    if (glFilter === "xbr") {
       draw(this.progXbr, this.srcTex, null, (p) => {
         gl.uniform2f(gl.getUniformLocation(p, "uTexSize"), PAL_W, PAL_H);
         gl.uniform1f(gl.getUniformLocation(p, "uScale"),
           Math.max(2, h / PAL_H));
       });
-    } else if (this.filter === "anime4k") {
+    } else if (glFilter === "anime4k") {
       const scale = h / PAL_H;
       const pushStrength = Math.min(scale / 6, 1);
       const gradStrength = Math.min(scale / 2, 1);

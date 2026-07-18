@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NN mega kernel bench</title>
+<style>
+  body { background: #111; color: #ccc; font: 14px/1.5 monospace; padding: 16px; }
+  canvas { border: 1px solid #444; image-rendering: auto; max-width: 100%; }
+  #log { white-space: pre; }
+</style>
+</head>
+<body>
+<h3>realesr-animevideov3-fp16 · hand-written WebGPU mega kernel · 320x200 → 1280x800</h3>
+<div id="log">loading…</div>
+<canvas id="out" width="1280" height="800"></canvas>
+<script src="vendor/ort/ort.webgpu.min.js"></script>
+<script>
+"use strict";
+const W = 320, H = 200, SCALE = 4;
+const GX = Math.ceil(W / 8), GY = Math.ceil(H / 8);
+
+const log = (s) => {
+  document.getElementById("log").textContent += "\n" + s;
+  console.log("[mega]", s);
+};
+
+// One WGSL module holding the whole network: conv_first (3->64 + PReLU),
+// conv_mid (64->64 + PReLU, dispatched 16x with per-layer weight offsets via
+// dynamic uniform offsets), conv_last (64->48 + CRD pixel-shuffle x4 +
+// nearest-upsample residual + clamp, straight into a storage texture).
+// Activations are NHWC vec4<f16>-packed (16 vec4 per pixel), weights are
+// mat4x4<f16> blocks so each tap/in-group is a single mat*vec FMA.
+// accF32 toggles f16-multiply/f32-accumulate vs pure-f16 accumulation.
+function makeShader(accF32) {
+  const ACC = accF32 ? "vec4<f32>" : "vec4<f16>";
+  const UP = accF32 ? "vec4<f32>" : "";      // widen mat*vec product
+  const DOWN = accF32 ? "vec4<f16>" : "";    // narrow back for storage
+  return /* wgsl */ `
+enable f16;
+
+struct Params {
+  matBase : u32,
+  biasBase : u32,
+  slopeBase : u32,
+  width : u32,
+  height : u32,
+};
+
+@group(0) @binding(0) var<uniform> P : Params;
+@group(0) @binding(1) var<storage, read> mats : array<mat4x4<f16>>;
+@group(0) @binding(2) var<storage, read> vecs : array<vec4<f16>>;
+@group(0) @binding(3) var<storage, read> src : array<vec4<f16>>;
+@group(0) @binding(4) var<storage, read_write> dst : array<vec4<f16>>;
+@group(0) @binding(5) var inputTex : texture_2d<f32>;
+@group(0) @binding(6) var outTex : texture_storage_2d<rgba8unorm, write>;
+
+const TS : u32 = 8u;               // workgroup tile is TS x TS output pixels
+var<workgroup> tile1 : array<vec4<f16>, 100>;    // (TS+2)^2, first layer
+var<workgroup> tile16 : array<vec4<f16>, 1600>;  // (TS+2)^2 * 16 vec4/pixel
+
+fn prelu(a : ${ACC}, s : vec4<f16>) -> vec4<f16> {
+  return ${DOWN}(max(a, ${ACC}()) + ${UP}(s) * min(a, ${ACC}()));
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn conv_first(@builtin(workgroup_id) wg : vec3<u32>,
+              @builtin(local_invocation_id) li : vec3<u32>,
+              @builtin(local_invocation_index) lidx : u32) {
+  let iw = i32(P.width); let ih = i32(P.height);
+  let x0 = i32(wg.x * TS) - 1; let y0 = i32(wg.y * TS) - 1;
+  for (var p = lidx; p < 100u; p += 64u) {
+    let px = x0 + i32(p % 10u);
+    let py = y0 + i32(p / 10u);
+    var v = vec4<f16>();
+    if (px >= 0 && px < iw && py >= 0 && py < ih) {
+      let t = textureLoad(inputTex, vec2<i32>(px, py), 0);
+      v = vec4<f16>(vec4<f32>(t.rgb, 0.0));
+    }
+    tile1[p] = v;
+  }
+  workgroupBarrier();
+
+  var acc : array<${ACC}, 16>;
+  for (var ov = 0u; ov < 16u; ov++) { acc[ov] = ${ACC}(vecs[P.biasBase + ov]); }
+  var m = P.matBase;
+  for (var t = 0u; t < 9u; t++) {
+    let v = tile1[(li.y + t / 3u) * 10u + li.x + (t % 3u)];
+    for (var ov = 0u; ov < 16u; ov++) {
+      acc[ov] += ${UP}(mats[m] * v);
+      m++;
+    }
+  }
+  let x = wg.x * TS + li.x; let y = wg.y * TS + li.y;
+  if (x < P.width && y < P.height) {
+    let base = (y * P.width + x) * 16u;
+    for (var ov = 0u; ov < 16u; ov++) {
+      dst[base + ov] = prelu(acc[ov], vecs[P.slopeBase + ov]);
+    }
+  }
+}
+
+fn loadTile16(wg : vec3<u32>, lidx : u32, iw : i32, ih : i32) {
+  let x0 = i32(wg.x * TS) - 1; let y0 = i32(wg.y * TS) - 1;
+  for (var p = lidx; p < 100u; p += 64u) {
+    let px = x0 + i32(p % 10u);
+    let py = y0 + i32(p / 10u);
+    if (px >= 0 && px < iw && py >= 0 && py < ih) {
+      let base = u32(py * iw + px) * 16u;
+      for (var c = 0u; c < 16u; c++) { tile16[p * 16u + c] = src[base + c]; }
+    } else {
+      for (var c = 0u; c < 16u; c++) { tile16[p * 16u + c] = vec4<f16>(); }
+    }
+  }
+  workgroupBarrier();
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn conv_mid(@builtin(workgroup_id) wg : vec3<u32>,
+            @builtin(local_invocation_id) li : vec3<u32>,
+            @builtin(local_invocation_index) lidx : u32) {
+  loadTile16(wg, lidx, i32(P.width), i32(P.height));
+
+  var acc : array<${ACC}, 16>;
+  for (var ov = 0u; ov < 16u; ov++) { acc[ov] = ${ACC}(vecs[P.biasBase + ov]); }
+  var m = P.matBase;
+  for (var t = 0u; t < 9u; t++) {
+    let tp = ((li.y + t / 3u) * 10u + li.x + (t % 3u)) * 16u;
+    for (var iv = 0u; iv < 16u; iv++) {
+      let v = tile16[tp + iv];
+      for (var ov = 0u; ov < 16u; ov++) {
+        acc[ov] += ${UP}(mats[m] * v);
+        m++;
+      }
+    }
+  }
+  let x = wg.x * TS + li.x; let y = wg.y * TS + li.y;
+  if (x < P.width && y < P.height) {
+    let base = (y * P.width + x) * 16u;
+    for (var ov = 0u; ov < 16u; ov++) {
+      dst[base + ov] = prelu(acc[ov], vecs[P.slopeBase + ov]);
+    }
+  }
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn conv_last(@builtin(workgroup_id) wg : vec3<u32>,
+             @builtin(local_invocation_id) li : vec3<u32>,
+             @builtin(local_invocation_index) lidx : u32) {
+  loadTile16(wg, lidx, i32(P.width), i32(P.height));
+
+  var acc : array<${ACC}, 12>;
+  for (var ov = 0u; ov < 12u; ov++) { acc[ov] = ${ACC}(vecs[P.biasBase + ov]); }
+  var m = P.matBase;
+  for (var t = 0u; t < 9u; t++) {
+    let tp = ((li.y + t / 3u) * 10u + li.x + (t % 3u)) * 16u;
+    for (var iv = 0u; iv < 16u; iv++) {
+      let v = tile16[tp + iv];
+      for (var ov = 0u; ov < 12u; ov++) {
+        acc[ov] += ${UP}(mats[m] * v);
+        m++;
+      }
+    }
+  }
+  let x = wg.x * TS + li.x; let y = wg.y * TS + li.y;
+  if (x < P.width && y < P.height) {
+    // CRD DepthToSpace: HR pixel (4x+bx, 4y+by), channel c comes from
+    // conv output channel c*16 + by*4 + bx = vec-group c*4+by, lane bx.
+    let res = textureLoad(inputTex, vec2<i32>(i32(x), i32(y)), 0).rgb;
+    for (var by = 0u; by < 4u; by++) {
+      for (var bx = 0u; bx < 4u; bx++) {
+        let rgb = vec3<f32>(f32(acc[by][bx]), f32(acc[4u + by][bx]),
+                            f32(acc[8u + by][bx])) + res;
+        textureStore(outTex, vec2<i32>(i32(x * 4u + bx), i32(y * 4u + by)),
+                     vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0));
+      }
+    }
+  }
+}
+`;
+}
+
+const BLIT_WGSL = /* wgsl */ `
+@group(0) @binding(0) var t : texture_2d<f32>;
+@vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
+  var p = array<vec2<f32>, 3>(vec2f(-1.0, 3.0), vec2f(-1.0, -1.0), vec2f(3.0, -1.0));
+  return vec4<f32>(p[i], 0.0, 1.0);
+}
+@fragment fn fs(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
+  return textureLoad(t, vec2<i32>(pos.xy), 0);
+}
+`;
+
+async function loadInputCanvas(url) {
+  const bmp = await createImageBitmap(await fetch(url).then((r) => r.blob()));
+  const c = document.createElement("canvas");
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d");
+  ctx.drawImage(bmp, 0, 0);
+  return c;
+}
+
+function buildEngine(device, manifest, weights, inputTex, outTex) {
+  const C = GPUShaderStage.COMPUTE;
+  const uni = { buffer: { type: "uniform", hasDynamicOffset: true } };
+  const ro = { buffer: { type: "read-only-storage" } };
+  const rw = { buffer: { type: "storage" } };
+  const bglFirst = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: C, ...uni },
+    { binding: 1, visibility: C, ...ro },
+    { binding: 2, visibility: C, ...ro },
+    { binding: 4, visibility: C, ...rw },
+    { binding: 5, visibility: C, texture: {} },
+  ]});
+  const bglMid = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: C, ...uni },
+    { binding: 1, visibility: C, ...ro },
+    { binding: 2, visibility: C, ...ro },
+    { binding: 3, visibility: C, ...ro },
+    { binding: 4, visibility: C, ...rw },
+  ]});
+  const bglLast = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: C, ...uni },
+    { binding: 1, visibility: C, ...ro },
+    { binding: 2, visibility: C, ...ro },
+    { binding: 3, visibility: C, ...ro },
+    { binding: 5, visibility: C, texture: {} },
+    { binding: 6, visibility: C, storageTexture: { access: "write-only", format: "rgba8unorm" } },
+  ]});
+
+  // Per-layer params, one 256-byte slot each, selected via dynamic offset.
+  const nLayers = manifest.layers.length;
+  const ubuf = device.createBuffer({
+    size: nLayers * 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const udata = new Uint32Array(nLayers * 64);
+  manifest.layers.forEach((l, i) => {
+    udata.set([l.matBase, l.biasBase, l.slopeBase, W, H], i * 64);
+  });
+  device.queue.writeBuffer(ubuf, 0, udata);
+
+  // The whole model lives in this one buffer, uploaded once.
+  const wbuf = device.createBuffer({
+    size: weights.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(wbuf, 0, weights);
+
+  // Ping-pong activation buffers: W*H pixels * 16 vec4<f16>.
+  const actSize = W * H * 16 * 8;
+  const actA = device.createBuffer({ size: actSize, usage: GPUBufferUsage.STORAGE });
+  const actB = device.createBuffer({ size: actSize, usage: GPUBufferUsage.STORAGE });
+
+  const u = { binding: 0, resource: { buffer: ubuf, size: 256 } };
+  const mats = { binding: 1, resource: { buffer: wbuf } };
+  const vecs = { binding: 2, resource: { buffer: wbuf } };
+  const bgFirst = device.createBindGroup({ layout: bglFirst, entries: [
+    u, mats, vecs,
+    { binding: 4, resource: { buffer: actA } },
+    { binding: 5, resource: inputTex.createView() },
+  ]});
+  const bgMidAB = device.createBindGroup({ layout: bglMid, entries: [
+    u, mats, vecs,
+    { binding: 3, resource: { buffer: actA } },
+    { binding: 4, resource: { buffer: actB } },
+  ]});
+  const bgMidBA = device.createBindGroup({ layout: bglMid, entries: [
+    u, mats, vecs,
+    { binding: 3, resource: { buffer: actB } },
+    { binding: 4, resource: { buffer: actA } },
+  ]});
+  const bgLast = device.createBindGroup({ layout: bglLast, entries: [
+    u, mats, vecs,
+    { binding: 3, resource: { buffer: actA } },
+    { binding: 5, resource: inputTex.createView() },
+    { binding: 6, resource: outTex.createView() },
+  ]});
+
+  // GPU-side timing (immune to CPU scheduling noise) when available.
+  let qs = null, qResolve = null, qRead = null;
+  if (device.features.has("timestamp-query")) {
+    qs = device.createQuerySet({ type: "timestamp", count: 2 });
+    qResolve = device.createBuffer({
+      size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+    qRead = device.createBuffer({
+      size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  }
+
+  return {
+    async compile(accF32) {
+      const module = device.createShaderModule({ code: makeShader(accF32) });
+      const mk = (bgl, entryPoint) => device.createComputePipelineAsync({
+        layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+        compute: { module, entryPoint },
+      });
+      [this.pFirst, this.pMid, this.pLast] = await Promise.all(
+        [mk(bglFirst, "conv_first"), mk(bglMid, "conv_mid"), mk(bglLast, "conv_last")]);
+    },
+    encode(encoder) {
+      const pass = encoder.beginComputePass(qs ? { timestampWrites: {
+        querySet: qs, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } } : {});
+      pass.setPipeline(this.pFirst);
+      pass.setBindGroup(0, bgFirst, [0]);
+      pass.dispatchWorkgroups(GX, GY);
+      pass.setPipeline(this.pMid);
+      for (let i = 0; i < 16; i++) {
+        pass.setBindGroup(0, i % 2 === 0 ? bgMidAB : bgMidBA, [(1 + i) * 256]);
+        pass.dispatchWorkgroups(GX, GY);
+      }
+      pass.setPipeline(this.pLast);
+      pass.setBindGroup(0, bgLast, [17 * 256]);
+      pass.dispatchWorkgroups(GX, GY);
+      pass.end();
+    },
+    async run() {
+      const encoder = device.createCommandEncoder();
+      this.encode(encoder);
+      if (qs) {
+        encoder.resolveQuerySet(qs, 0, 2, qResolve, 0);
+        encoder.copyBufferToBuffer(qResolve, 0, qRead, 0, 16);
+      }
+      device.queue.submit([encoder.finish()]);
+      await device.queue.onSubmittedWorkDone();
+      if (!qs) return null;
+      await qRead.mapAsync(GPUMapMode.READ);
+      const t = new BigInt64Array(qRead.getMappedRange());
+      const gpuMs = Number(t[1] - t[0]) / 1e6;
+      qRead.unmap();
+      return gpuMs;
+    },
+  };
+}
+
+async function readback(device, outTex) {
+  const buf = device.createBuffer({
+    size: W * SCALE * 4 * H * SCALE,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const encoder = device.createCommandEncoder();
+  encoder.copyTextureToBuffer(
+    { texture: outTex }, { buffer: buf, bytesPerRow: W * SCALE * 4 },
+    [W * SCALE, H * SCALE]);
+  device.queue.submit([encoder.finish()]);
+  await buf.mapAsync(GPUMapMode.READ);
+  const data = new Uint8Array(buf.getMappedRange()).slice();
+  buf.destroy();
+  return data;
+}
+
+async function bench(name, fn, warmup = 3, n = 20) {
+  for (let i = 0; i < warmup; i++) await fn();
+  const times = [], gpu = [];
+  for (let i = 0; i < n; i++) {
+    const t0 = performance.now();
+    const g = await fn();
+    times.push(performance.now() - t0);
+    if (g !== null) gpu.push(g);
+  }
+  times.sort((a, b) => a - b);
+  gpu.sort((a, b) => a - b);
+  const avg = times.reduce((a, b) => a + b, 0) / n;
+  const r = {
+    avg_ms: +avg.toFixed(2),
+    median_ms: +times[n >> 1].toFixed(2),
+    min_ms: +times[0].toFixed(2),
+    max_ms: +times[n - 1].toFixed(2),
+    fps: +(1000 / avg).toFixed(1),
+  };
+  if (gpu.length) {
+    r.gpu_median_ms = +gpu[gpu.length >> 1].toFixed(2);
+    r.gpu_min_ms = +gpu[0].toFixed(2);
+    r.gpu_fps = +(1000 / r.gpu_median_ms).toFixed(1);
+  }
+  log(name + " " + JSON.stringify(r));
+}
+
+// Reference: run the same fp16 ONNX through onnxruntime-web, quantized to u8
+// exactly like our rgba8unorm store (clamp + round).
+async function ortReference(inputCanvas) {
+  ort.env.wasm.wasmPaths = new URL("vendor/ort/", location.href).href;
+  const session = await ort.InferenceSession.create(
+    "models/realesr-animevideov3-fp16.onnx", {
+      executionProviders: ["webgpu"],
+      graphOptimizationLevel: "all",
+      freeDimensionOverrides: { h: H, w: W },
+    });
+  const { data } = inputCanvas.getContext("2d").getImageData(0, 0, W, H);
+  const n = W * H;
+  const f = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) {
+    f[i] = data[i * 4] / 255;
+    f[n + i] = data[i * 4 + 1] / 255;
+    f[2 * n + i] = data[i * 4 + 2] / 255;
+  }
+  const out = (await session.run({
+    input: new ort.Tensor("float32", f, [1, 3, H, W]) })).output.data;
+  const hn = W * SCALE * H * SCALE;
+  const u8 = new Uint8Array(3 * hn);
+  for (let i = 0; i < hn; i++) {
+    u8[i * 3] = Math.round(Math.min(1, Math.max(0, out[i])) * 255);
+    u8[i * 3 + 1] = Math.round(Math.min(1, Math.max(0, out[hn + i])) * 255);
+    u8[i * 3 + 2] = Math.round(Math.min(1, Math.max(0, out[2 * hn + i])) * 255);
+  }
+  return u8;
+}
+
+function compare(name, ours, ref) {
+  const hn = W * SCALE * H * SCALE;
+  let maxd = 0, sum = 0, over2 = 0;
+  for (let i = 0; i < hn; i++) {
+    for (let c = 0; c < 3; c++) {
+      const d = Math.abs(ours[i * 4 + c] - ref[i * 3 + c]);
+      if (d > maxd) maxd = d;
+      if (d > 2) over2++;
+      sum += d;
+    }
+  }
+  log(name + " " + JSON.stringify({
+    max_diff: maxd,
+    mean_diff: +(sum / (hn * 3)).toFixed(4),
+    pct_over_2: +(over2 / (hn * 3) * 100).toFixed(3),
+  }));
+}
+
+async function main() {
+  document.getElementById("log").textContent = "";
+  log("start");
+  if (!navigator.gpu) { log("ERROR no WebGPU"); return; }
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) { log("ERROR no adapter"); return; }
+  if (!adapter.features.has("shader-f16")) { log("ERROR no shader-f16"); return; }
+  log("adapter ok, requesting device…");
+  const features = ["shader-f16"];
+  if (adapter.features.has("timestamp-query")) features.push("timestamp-query");
+  const device = await adapter.requestDevice({ requiredFeatures: features });
+  log("device ok (" + features.join(", ") + ")");
+  device.addEventListener("uncapturederror", (e) => log("GPU ERROR " + e.error.message));
+
+  let t0 = performance.now();
+  const [manifest, weights, inputCanvas] = await Promise.all([
+    fetch("models/realesr-animevideov3-fp16.mega.json").then((r) => r.json()),
+    fetch("models/realesr-animevideov3-fp16.mega.bin").then((r) => r.arrayBuffer()),
+    loadInputCanvas("nn-bench-input.png"),
+  ]);
+  log(`weights fetched: ${weights.byteLength} bytes, ${manifest.layers.length} layers`);
+
+  const inputTex = device.createTexture({
+    size: [W, H], format: "rgba8unorm",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST |
+           GPUTextureUsage.RENDER_ATTACHMENT });
+  device.queue.copyExternalImageToTexture(
+    { source: inputCanvas }, { texture: inputTex }, [W, H]);
+  const outTex = device.createTexture({
+    size: [W * SCALE, H * SCALE], format: "rgba8unorm",
+    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING |
+           GPUTextureUsage.COPY_SRC });
+
+  const engine = buildEngine(device, manifest, weights, inputTex, outTex);
+  log(`init (weights on GPU) in ${(performance.now() - t0).toFixed(0)}ms`);
+
+  const ref = location.search.includes("noref") ? null :
+    await ortReference(inputCanvas).catch((e) => {
+      log("ort reference unavailable: " + e); return null; });
+
+  for (const accF32 of [false, true]) {
+    const tag = accF32 ? "F32ACC" : "F16ACC";
+    t0 = performance.now();
+    await engine.compile(accF32);
+    log(`${tag} pipelines compiled in ${(performance.now() - t0).toFixed(0)}ms`);
+    await bench("RESULT_" + tag, () => engine.run());
+    if (ref) compare("DIFF_vs_ort_" + tag, await readback(device, outTex), ref);
+  }
+
+  // Present the last result on the canvas (WebGPU context, no CPU roundtrip).
+  const ctx = document.getElementById("out").getContext("webgpu");
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device, format });
+  const blit = device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module: device.createShaderModule({ code: BLIT_WGSL }), entryPoint: "vs" },
+    fragment: { module: device.createShaderModule({ code: BLIT_WGSL }), entryPoint: "fs",
+                targets: [{ format }] },
+  });
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginRenderPass({ colorAttachments: [{
+    view: ctx.getCurrentTexture().createView(),
+    loadOp: "clear", clearValue: [0, 0, 0, 1], storeOp: "store" }] });
+  pass.setPipeline(blit);
+  pass.setBindGroup(0, device.createBindGroup({
+    layout: blit.getBindGroupLayout(0),
+    entries: [{ binding: 0, resource: outTex.createView() }] }));
+  pass.draw(3);
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  log("output drawn.");
+}
+
+main().catch((e) => log("ERROR " + (e.stack || e)));
+</script>
+</body>
+</html>
