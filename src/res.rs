@@ -85,7 +85,7 @@ impl Resources {
                 }
                 let sprite = globals.files.mgo.chunk_decompressed(n)?;
                 globals.game.event_objects[eo_index].sprite_frames_auto =
-                    surface::sprite_frame_count(&sprite) as u16;
+                    surface::sprite_num_frames(&sprite) as u16;
                 self.event_object_sprites.push(Some(sprite));
             }
 
@@ -190,6 +190,58 @@ mod tests {
         let id = base + 1; // first object of the scene
         let via_id = res.event_object_sprite(id);
         assert_eq!(via_id.is_some(), res.event_object_sprites[0].is_some());
+    }
+
+    #[test]
+    fn auto_frame_range_only_covers_valid_frames() {
+        // Regression test for the world-map animation glitch: the last header
+        // word of a sprite (index word[0]-1) is an end marker, not a frame
+        // offset, so sprite_frames_auto must be word[0]-1 — cycling into the
+        // marker slot blits garbage. Every frame the auto-animation modulus
+        // allows must decode to a plausible RLE frame.
+        let mut g = globals();
+        g.load_default_game().unwrap();
+
+        let mut seen = std::collections::HashSet::new();
+        let mut markers_invalid = 0usize;
+        let scene_count = g
+            .game
+            .scenes
+            .iter()
+            .take_while(|s| s.map_num != 0 || s.event_object_index != 0)
+            .count();
+
+        for scene in 0..scene_count.saturating_sub(1) {
+            let start = g.game.scenes[scene].event_object_index as usize;
+            let end = g.game.scenes[scene + 1].event_object_index as usize;
+            for i in start..end {
+                let n = g.game.event_objects[i].sprite_num as usize;
+                if n == 0 || !seen.insert(n) {
+                    continue;
+                }
+                let sprite = g.files.mgo.chunk_decompressed(n).unwrap();
+                let plausible = |f: usize| {
+                    surface::sprite_frame(&sprite, f).is_some_and(|fr| {
+                        let w = surface::rle_width(fr);
+                        let h = surface::rle_height(fr);
+                        fr.len() >= 4 && w > 0 && h > 0 && w <= 320 && h <= 200
+                    })
+                };
+                for f in 0..surface::sprite_num_frames(&sprite) {
+                    assert!(plausible(f), "sprite {n}: real frame {f} invalid");
+                }
+                let marker = surface::sprite_frame_count(&sprite).wrapping_sub(1);
+                if !plausible(marker) {
+                    markers_invalid += 1;
+                }
+            }
+        }
+        // The data itself proves the -1 matters: many end-marker slots do not
+        // decode as frames (367 of 539 sprites in the DOS data set).
+        assert!(
+            markers_invalid > 100,
+            "expected many invalid end-marker slots, got {markers_invalid}"
+        );
     }
 
     #[test]

@@ -82,7 +82,7 @@ impl Engine {
                     self.restore_screen();
 
                     if let Some(sp) = sprite.as_ref() {
-                        let count = surface::sprite_frame_count(sp).max(1);
+                        let count = surface::sprite_num_frames(sp).max(1);
                         let f = (self.ticks() / 150) as usize % count;
                         if let Some(frame) = surface::sprite_frame(sp, f) {
                             self.screen.blit_rle(frame, 0, 0);
@@ -137,7 +137,7 @@ impl Engine {
             self.apply_wave();
 
             if let Some(sp) = sprite.as_ref() {
-                let count = surface::sprite_frame_count(sp).max(1);
+                let count = surface::sprite_num_frames(sp).max(1);
                 let f = (self.ticks() / 150) as usize % count;
                 if let Some(frame) = surface::sprite_frame(sp, f) {
                     self.screen.blit_rle(frame, 0, 0);

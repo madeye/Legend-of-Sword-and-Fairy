@@ -193,7 +193,18 @@ pub fn rle_height(rle: &[u8]) -> usize {
     }
 }
 
-/// Number of frames in a sprite (LPCSPRITE).
+/// PAL_SpriteGetNumFrames: the real number of frames in a sprite. The first
+/// header word doubles as both the frame-0 offset (in words) and the header
+/// length, so a sprite with header word N has N-1 frames — the last header
+/// word is an end marker (usually 0), not a frame offset.
+pub fn sprite_num_frames(sprite: &[u8]) -> usize {
+    sprite_frame_count(sprite).saturating_sub(1)
+}
+
+/// The raw first header word of a sprite: the upper bound PAL_SpriteGetFrame
+/// uses for frame indexes. One more than `sprite_num_frames` because a few
+/// broken sprites (the "Bloody-Mouth Bug" hack in the C code) store a valid
+/// frame in the end-marker slot.
 pub fn sprite_frame_count(sprite: &[u8]) -> usize {
     if sprite.len() < 2 {
         0
@@ -212,7 +223,13 @@ pub fn sprite_frame(sprite: &[u8], n: usize) -> Option<&[u8]> {
     if sprite.len() < idx + 2 {
         return None;
     }
-    let offset = (u16_le(sprite, idx) as usize) << 1;
+    let mut offset = (u16_le(sprite, idx) as usize) << 1;
+    // C: `if (offset == 0x18444) offset = (WORD)offset;` — hack for broken
+    // sprites like the Bloody-Mouth Bug, where the DOS engine's 16-bit
+    // arithmetic wrapped this offset.
+    if offset == 0x18444 {
+        offset &= 0xFFFF;
+    }
     if offset >= sprite.len() {
         return None;
     }
@@ -274,5 +291,38 @@ mod tests {
         s2.blit_rle(f1, 0, 0);
         assert_eq!(s2.get_pixel(0, 0), 43);
         assert!(sprite_frame(&sp, 2).is_none());
+
+        // PAL_SpriteGetNumFrames: the last table slot is an end marker, not a
+        // frame — the real frame count is word[0]-1. sprite_frame still allows
+        // reading the marker slot (the C "Bloody-Mouth Bug" hack), but
+        // animation moduli must use sprite_num_frames.
+        assert_eq!(sprite_num_frames(&sp), 1);
+        assert_eq!(sprite_num_frames(&[]), 0);
+        assert_eq!(sprite_num_frames(&[0, 0]), 0);
+    }
+
+    #[test]
+    fn sprite_frame_broken_offset_hack() {
+        // C: `if (offset == 0x18444) offset = (WORD)offset;` — the offset
+        // word 0xC222 (<<1 = 0x18444) wraps to 0x8444 like the DOS engine's
+        // 16-bit arithmetic did.
+        let mut sp = vec![0u8; 0x8444 + 6];
+        sp[0] = 2; // count = 2
+        sp[2] = 0x22; // frame 1 offset word = 0xC222
+        sp[3] = 0xC2;
+        sp[0x8444] = 1; // 1x1 frame: w=1, h=1, run of 1 pixel with value 7
+        sp[0x8446] = 1;
+        sp[0x8448] = 1;
+        sp[0x8449] = 7;
+        let f = sprite_frame(&sp, 1).expect("hack offset resolves");
+        assert_eq!(rle_width(f), 1);
+        let mut s = Surface::new(2, 2);
+        s.blit_rle(f, 0, 0);
+        assert_eq!(s.get_pixel(0, 0), 7);
+
+        // Any other out-of-range offset still yields None.
+        let mut sp2 = vec![2, 0, 0xFF, 0xFF];
+        sp2.extend_from_slice(&[1, 0, 1, 0, 1, 9]);
+        assert!(sprite_frame(&sp2, 1).is_none());
     }
 }
