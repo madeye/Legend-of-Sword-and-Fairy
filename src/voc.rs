@@ -102,7 +102,10 @@ mod tests {
 
     #[test]
     fn decodes_all_real_voc_chunks() {
-        let chunks = read_mkf_chunks(concat!(env!("CARGO_MANIFEST_DIR"), "/pal/voc.mkf"));
+        // Upper-case literal path: unlike DataDir lookups this bypasses the
+        // case-insensitive matching, and the committed file is VOC.MKF
+        // (breaks on case-sensitive filesystems otherwise, e.g. Linux CI).
+        let chunks = read_mkf_chunks(concat!(env!("CARGO_MANIFEST_DIR"), "/pal/VOC.MKF"));
         assert!(!chunks.is_empty());
 
         // Empty chunks are unused MKF slots, not VOC data; the success rate
