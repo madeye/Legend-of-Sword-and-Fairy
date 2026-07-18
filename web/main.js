@@ -23,8 +23,20 @@ const KEY_ALIASES = { NumpadEnter: "Enter", AltLeft: "Escape", AltRight: "Escape
 const RING_CAPACITY = 128;
 
 const canvas = document.getElementById("screen");
-const ctx = canvas.getContext("2d");
 const status = document.getElementById("status");
+
+// WebGL2 upscaling presenter (upscale.js); falls back to 2d internally.
+const presenter = new PalPresenter(canvas);
+const filterSel = document.getElementById("filter");
+if (presenter.gl) {
+  filterSel.value = presenter.filter;
+  filterSel.addEventListener("change", () => {
+    presenter.setFilter(filterSel.value);
+    filterSel.blur(); // give the keyboard back to the game
+  });
+} else {
+  document.getElementById("filterbar").hidden = true;
+}
 
 async function boot() {
   if (typeof SharedArrayBuffer === "undefined") {
@@ -146,8 +158,7 @@ async function boot() {
   worker.onmessage = (e) => {
     if (e.data && e.data.byteLength === 320 * 200 * 4) {
       status.textContent = "";
-      ctx.putImageData(
-        new ImageData(new Uint8ClampedArray(e.data.buffer), 320, 200), 0, 0);
+      presenter.present(new Uint8Array(e.data.buffer));
     } else if (e.data && e.data.palSave !== undefined) {
       // Persist a saved game posted by the engine.
       const u8 = e.data.data;
