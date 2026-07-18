@@ -134,6 +134,9 @@ pub struct UiState {
     pub user_skip: bool,
     /// fPlayingRNG.
     pub playing_rng: bool,
+    /// RGM chunk of the portrait shown by the current dialog (0 = none).
+    /// Gates dialog voice-over playback; not part of the original engine.
+    pub dialog_face: i32,
     /// g_fUpdatedInBattle.
     pub updated_in_battle: bool,
 
@@ -165,6 +168,7 @@ impl Default for UiState {
             dialog_shadow: 0,
             user_skip: false,
             playing_rng: false,
+            dialog_face: 0,
             updated_in_battle: false,
             in_dialog: false,
             auto_confirm: false,
@@ -806,6 +810,12 @@ impl Engine {
         self.ui.current_dialog_line = 0;
         self.ui.pos_dialog_title = (12, 8);
         self.ui.user_skip = false;
+        self.ui.dialog_face = if dialog_location == DIALOG_UPPER || dialog_location == DIALOG_LOWER
+        {
+            num_char_face
+        } else {
+            0
+        };
 
         if font_color != 0 {
             self.ui.current_font_color = font_color;
@@ -1190,6 +1200,12 @@ impl Engine {
             );
         }
 
+        // The dialog advanced (key press or timeout): cut any voice-over
+        // still speaking the lines the player just moved past.
+        if let Some(a) = self.audio.as_ref() {
+            a.stop_voice();
+        }
+
         self.input.clear_key_state();
         self.ui.user_skip = false;
     }
@@ -1219,6 +1235,7 @@ impl Engine {
         self.ui.dialog_position = DIALOG_UPPER;
         self.ui.user_skip = false;
         self.ui.playing_rng = false;
+        self.ui.dialog_face = 0;
     }
 }
 

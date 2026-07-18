@@ -48,6 +48,35 @@ impl DataDir {
     pub fn mkf(&self, name: &str) -> io::Result<Mkf> {
         Mkf::from_bytes(self.read_file(name)?)
     }
+
+    /// Read an optional data file that is intentionally NOT part of the
+    /// eagerly fetched `PAL_FILES` set (e.g. per-scene voice banks): fetch it
+    /// on demand with a synchronous XHR. Sync XHR with an arraybuffer
+    /// response is legal in dedicated workers, and the engine worker is fully
+    /// blocking by design. `name` must be the exact (lowercase) path under
+    /// the served pal/ directory.
+    pub fn read_file_lazy(&self, name: &str) -> io::Result<Vec<u8>> {
+        let err = |m: &str| io::Error::new(io::ErrorKind::NotFound, format!("{m}: {name}"));
+        // Same base as web/main.js's fetches: relative to web/worker.js.
+        let url = format!("../pal/{name}");
+        let xhr = web_sys::XmlHttpRequest::new().map_err(|_| err("XHR unavailable"))?;
+        xhr.open_with_async("GET", &url, false)
+            .map_err(|_| err("XHR open failed"))?;
+        xhr.set_response_type(web_sys::XmlHttpRequestResponseType::Arraybuffer);
+        xhr.send().map_err(|_| err("XHR send failed"))?;
+        if xhr.status().unwrap_or(0) != 200 {
+            return Err(err("lazy data file not found"));
+        }
+        let resp = xhr.response().map_err(|_| err("XHR response failed"))?;
+        if resp.is_undefined() || resp.is_null() {
+            return Err(err("empty XHR response"));
+        }
+        let bytes = js_sys::Uint8Array::new(&resp).to_vec();
+        web_sys::console::log_1(
+            &format!("rustpal: lazy loaded {name} ({} bytes)", bytes.len()).into(),
+        );
+        Ok(bytes)
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -120,6 +149,13 @@ impl DataDir {
     /// Open an MKF archive from the data dir.
     pub fn mkf(&self, name: &str) -> io::Result<Mkf> {
         Mkf::from_bytes(self.read_file(name)?)
+    }
+
+    /// Read an optional data file (e.g. per-scene voice banks). `name` may
+    /// contain a subdirectory; the case-insensitive fallback of `read_file`
+    /// only scans the top level, so callers must use the exact on-disk name.
+    pub fn read_file_lazy(&self, name: &str) -> io::Result<Vec<u8>> {
+        fs::read(self.root.join(name))
     }
 }
 

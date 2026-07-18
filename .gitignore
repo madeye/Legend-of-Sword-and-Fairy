@@ -5,3 +5,8 @@ reference/
 /web/pkg/
 err.log
 .claude/
+/pal/voice/
+/tools/voice/cache/
+/tools/voice/faces/
+/tools/voice/.venv/
+/tools/voice/samples/

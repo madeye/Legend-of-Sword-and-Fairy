@@ -28,6 +28,7 @@ pub mod ui;
 pub mod uibattle;
 pub mod uigame;
 pub mod voc;
+pub mod voice;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 pub mod yj;

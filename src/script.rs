@@ -2549,6 +2549,7 @@ impl Engine {
 
                 // 0xFFFF: print dialog text (DOS: no message file).
                 0xFFFF => {
+                    self.play_dialog_voice(op[0]);
                     let text = self.texts.msg(op[0] as usize);
                     self.show_dialog_text(&text);
                     script_entry += 1;

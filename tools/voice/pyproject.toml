@@ -1,0 +1,12 @@
+[project]
+name = "pal-voice-tools"
+version = "0.1.0"
+description = "Offline TTS pipeline: synthesize NPC dialog voice-over with MLX Kokoro-82M and pack per-scene voice banks"
+requires-python = ">=3.10"
+dependencies = [
+    "mlx-audio",
+    "misaki[zh]",
+    "opencc",
+    "soundfile",
+    "numpy",
+]

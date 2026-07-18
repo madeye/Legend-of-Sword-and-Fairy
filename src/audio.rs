@@ -29,20 +29,27 @@ struct SoundInstance {
 }
 
 impl SoundInstance {
-    fn from_voc(voc: VocSound, out_rate: u32) -> SoundInstance {
-        let samples: Vec<i16> = voc
-            .samples
-            .iter()
-            .map(|&b| ((b as i16) - 0x80) << 8)
-            .collect();
-        let step = ((voc.rate as u64) << 16) / out_rate.max(1) as u64;
+    fn from_samples(samples: Vec<i16>, src_rate: u32, out_rate: u32) -> SoundInstance {
+        let step = ((src_rate as u64) << 16) / out_rate.max(1) as u64;
         SoundInstance {
             samples,
             pos: 0,
             step,
         }
     }
+
+    fn from_voc(voc: VocSound, out_rate: u32) -> SoundInstance {
+        let samples: Vec<i16> = voc
+            .samples
+            .iter()
+            .map(|&b| ((b as i16) - 0x80) << 8)
+            .collect();
+        SoundInstance::from_samples(samples, voc.rate, out_rate)
+    }
 }
+
+/// Music volume multiplier while dialog voice is playing.
+const VOICE_DUCK: f32 = 0.6;
 
 struct Shared {
     music: Option<RixPlayer>,
@@ -50,6 +57,9 @@ struct Shared {
     music_volume: f32,
     music_fade_step: f32,
     sounds: Vec<SoundInstance>,
+    /// Dialog voice queue: only the front plays; finished clips pop so
+    /// consecutive dialog lines run back-to-back.
+    voice: std::collections::VecDeque<SoundInstance>,
     /// Persistent scratch buffer for the music renderer.
     music_buf: Vec<[i16; 2]>,
 }
@@ -61,6 +71,7 @@ impl Shared {
             music_volume: 1.0,
             music_fade_step: 0.0,
             sounds: Vec::new(),
+            voice: std::collections::VecDeque::new(),
             music_buf: Vec::new(),
         }
     }
@@ -111,9 +122,24 @@ impl Shared {
                     self.music_fade_step = 0.0;
                 }
             }
-            let mv = self.music_volume;
-            let mut l = music_buf[i][0] as f32 / 32768.0 * mv;
-            let mut r = music_buf[i][1] as f32 / 32768.0 * mv;
+            // Dialog voice: play the queue front, popping finished clips so
+            // the next line follows gaplessly. Ducks the music below speech.
+            let mut voice = 0.0f32;
+            while let Some(s) = self.voice.front_mut() {
+                let idx = (s.pos >> 16) as usize;
+                if idx < s.samples.len() {
+                    voice = s.samples[idx] as f32 / 32768.0;
+                    s.pos += s.step;
+                    break;
+                }
+                self.voice.pop_front();
+            }
+            let mut mv = self.music_volume;
+            if !self.voice.is_empty() {
+                mv *= VOICE_DUCK;
+            }
+            let mut l = music_buf[i][0] as f32 / 32768.0 * mv + voice;
+            let mut r = music_buf[i][1] as f32 / 32768.0 * mv + voice;
             // Mix sound effects.
             for s in self.sounds.iter_mut() {
                 let idx = (s.pos >> 16) as usize;
@@ -209,6 +235,20 @@ impl Mixer {
             .push(SoundInstance::from_voc(voc, self.out_rate));
     }
 
+    /// Queue a dialog voice clip after any already-playing ones.
+    pub fn play_voice(&self, samples: Vec<i16>, rate: u32) {
+        self.shared
+            .lock()
+            .unwrap()
+            .voice
+            .push_back(SoundInstance::from_samples(samples, rate, self.out_rate));
+    }
+
+    /// Cut dialog voice playback (player advanced the dialog).
+    pub fn stop_voice(&self) {
+        self.shared.lock().unwrap().voice.clear();
+    }
+
     /// Native audio runs in the cpal callback; nothing to pump.
     pub fn pump(&self) {}
 }
@@ -283,6 +323,20 @@ impl Mixer {
             .0
             .sounds
             .push(SoundInstance::from_voc(voc, self.out_rate));
+    }
+
+    /// Queue a dialog voice clip after any already-playing ones.
+    pub fn play_voice(&self, samples: Vec<i16>, rate: u32) {
+        self.shared
+            .borrow_mut()
+            .0
+            .voice
+            .push_back(SoundInstance::from_samples(samples, rate, self.out_rate));
+    }
+
+    /// Cut dialog voice playback (player advanced the dialog).
+    pub fn stop_voice(&self) {
+        self.shared.borrow_mut().0.voice.clear();
     }
 
     /// Top the ring buffer up to `target_ahead` frames. Called from

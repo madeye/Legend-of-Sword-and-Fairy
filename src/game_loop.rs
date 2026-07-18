@@ -67,6 +67,14 @@ const OPENING_MENU_HD_PNG: &[u8] = include_bytes!("../resources/hd/opening-menu-
 /// One entry of the hardware palette.
 pub type PalColor = [u8; 3];
 
+/// Dialog voice-over kill switch (`PAL_VOICE=0`; native only).
+fn voice_enabled() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::var("PAL_VOICE").map_or(true, |v| v != "0");
+    #[cfg(target_arch = "wasm32")]
+    true
+}
+
 /// UTIL_Delay's underlying sleep. On the web the engine runs inside a Web
 /// Worker where blocking is allowed but `std::thread::sleep` panics, so it
 /// parks on `Atomics.wait` instead.
@@ -400,6 +408,8 @@ pub struct Engine {
     /// MUS.MKF (RIX songs) and VOC.MKF (sound effects).
     mus: Mkf,
     voc: Mkf,
+    /// Lazily loaded per-scene dialog voice banks (TTS voice-over).
+    pub voice: crate::voice::VoiceState,
     /// Currently playing music number (AUDIO layer bookkeeping).
     pub cur_music: i32,
 
@@ -464,6 +474,7 @@ impl Engine {
             audio,
             mus,
             voc,
+            voice: crate::voice::VoiceState::new(),
             cur_music: 0,
             input: InputState::new(),
             video,
@@ -612,6 +623,31 @@ impl Engine {
         };
         if let Some(voc) = crate::voc::decode_voc(chunk) {
             audio.play_sound(voc);
+        }
+    }
+
+    /// Load the current scene's dialog voice bank (lazy, LRU-cached). Called
+    /// wherever a `LOAD_SCENE` resource load completes. No audio device (or
+    /// `PAL_VOICE=0`) disables voice entirely.
+    pub fn load_voice_bank(&mut self) {
+        if self.audio.is_none() || !voice_enabled() {
+            return;
+        }
+        self.voice
+            .ensure_scene(self.globals.num_scene, &self.globals.data_dir);
+    }
+
+    /// Queue the voice clip for one dialog line (0xFFFF script op). Silent
+    /// no-op unless a portrait dialog is up and the line is in the bank.
+    pub fn play_dialog_voice(&mut self, msg_id: u16) {
+        let Some(audio) = self.audio.as_ref() else {
+            return;
+        };
+        if self.ui.dialog_face <= 0 {
+            return;
+        }
+        if let Some((clip, rate)) = self.voice.get(self.globals.num_scene, msg_id as u32) {
+            audio.play_voice(clip.to_vec(), rate);
         }
     }
 
@@ -1084,6 +1120,9 @@ impl Engine {
                         self.update_equipments();
                         let music = self.globals.num_music as i32;
                         self.play_music(music, true, 1.0);
+                    }
+                    if flags.scene {
+                        self.load_voice_bank();
                     }
                 }
                 Err(e) => {

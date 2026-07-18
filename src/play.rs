@@ -425,6 +425,9 @@ impl Engine {
             self.play_music(num_music, true, 0.0);
             self.update_equipments();
         }
+        if done.scene {
+            self.load_voice_bank();
+        }
         let _ = LOAD_GLOBAL_DATA; // documents which flag drives the above
     }
 }
