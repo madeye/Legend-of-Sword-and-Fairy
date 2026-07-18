@@ -16,11 +16,24 @@
 const PAL_W = 320;
 const PAL_H = 200;
 
-const VERT_SRC = `#version 300 es
+// Two vertex shader variants. The texture rows are uploaded top-first but
+// GL framebuffer row 0 is at the bottom, so exactly one flip is needed on
+// the way to the screen. Passes that render to the canvas flip; passes
+// that render into an intermediate FBO must NOT flip, or each extra pass
+// re-flips the image (an odd number of passes would display upside down).
+const VERT_FLIP = `#version 300 es
 layout(location = 0) in vec2 aPos;
 out vec2 vTex;
 void main() {
   vTex = vec2(aPos.x * 0.5 + 0.5, 0.5 - aPos.y * 0.5);
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}`;
+
+const VERT_NOFLIP = `#version 300 es
+layout(location = 0) in vec2 aPos;
+out vec2 vTex;
+void main() {
+  vTex = aPos * 0.5 + 0.5;
   gl_Position = vec4(aPos, 0.0, 1.0);
 }`;
 
@@ -331,8 +344,9 @@ class PalPresenter {
       }
       return s;
     };
-    const vert = compile(gl.VERTEX_SHADER, VERT_SRC);
-    const link = (fragSrc) => {
+    const vertFlip = compile(gl.VERTEX_SHADER, VERT_FLIP);
+    const vertNoflip = compile(gl.VERTEX_SHADER, VERT_NOFLIP);
+    const link = (vert, fragSrc) => {
       const p = gl.createProgram();
       gl.attachShader(p, vert);
       gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fragSrc));
@@ -342,12 +356,13 @@ class PalPresenter {
       }
       return p;
     };
-    this.progCopy = link(COPY_FRAG);
-    this.progXbr = link(XBR_FRAG);
-    this.progLuma = link(A4K_LUMA_FRAG);
-    this.progPush = link(a4kPushFrag("FragColor = lightest;"));
-    this.progGrad = link(A4K_GRAD_FRAG);
-    this.progPushGrad = link(a4kPushFrag("FragColor = vec4(lightest.rgb, 1.0);"));
+    // To-screen passes flip; FBO-to-FBO passes preserve orientation.
+    this.progCopy = link(vertFlip, COPY_FRAG);
+    this.progXbr = link(vertFlip, XBR_FRAG);
+    this.progLuma = link(vertNoflip, A4K_LUMA_FRAG);
+    this.progPush = link(vertNoflip, a4kPushFrag("FragColor = lightest;"));
+    this.progGrad = link(vertNoflip, A4K_GRAD_FRAG);
+    this.progPushGrad = link(vertFlip, a4kPushFrag("FragColor = vec4(lightest.rgb, 1.0);"));
 
     // Fullscreen triangle.
     const vao = gl.createVertexArray();
