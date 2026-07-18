@@ -22,7 +22,7 @@ const NN_W = 320;
 const NN_H = 200;
 const NN_SCALE = 4;
 
-const NN_WGSL = /* wgsl */ `
+const NN_PRELUDE = /* wgsl */ `
 enable f16;
 
 struct Params {
@@ -41,13 +41,15 @@ struct Params {
 @group(0) @binding(5) var inputTex : texture_2d<f32>;
 @group(0) @binding(6) var outTex : texture_storage_2d<rgba8unorm, write>;
 
-const TS : u32 = 8u;               // workgroup tile is TS x TS output pixels
-var<workgroup> tile1 : array<vec4<f16>, 100>;    // (TS+2)^2, first layer
-var<workgroup> tile16 : array<vec4<f16>, 1600>;  // (TS+2)^2 * 16 vec4/pixel
-
 fn prelu(a : vec4<f16>, s : vec4<f16>) -> vec4<f16> {
   return max(a, vec4<f16>()) + s * min(a, vec4<f16>());
 }
+`;
+
+const NN_WGSL = NN_PRELUDE + /* wgsl */ `
+const TS : u32 = 8u;               // workgroup tile is TS x TS output pixels
+var<workgroup> tile1 : array<vec4<f16>, 100>;    // (TS+2)^2, first layer
+var<workgroup> tile16 : array<vec4<f16>, 1600>;  // (TS+2)^2 * 16 vec4/pixel
 
 @compute @workgroup_size(8, 8, 1)
 fn conv_first(@builtin(workgroup_id) wg : vec3<u32>,
@@ -102,34 +104,6 @@ fn loadTile16(wg : vec3<u32>, lidx : u32, iw : i32, ih : i32) {
 }
 
 @compute @workgroup_size(8, 8, 1)
-fn conv_mid(@builtin(workgroup_id) wg : vec3<u32>,
-            @builtin(local_invocation_id) li : vec3<u32>,
-            @builtin(local_invocation_index) lidx : u32) {
-  loadTile16(wg, lidx, i32(P.width), i32(P.height));
-
-  var acc : array<vec4<f16>, 16>;
-  for (var ov = 0u; ov < 16u; ov++) { acc[ov] = vecs[P.biasBase + ov]; }
-  var m = P.matBase;
-  for (var t = 0u; t < 9u; t++) {
-    let tp = ((li.y + t / 3u) * 10u + li.x + (t % 3u)) * 16u;
-    for (var iv = 0u; iv < 16u; iv++) {
-      let v = tile16[tp + iv];
-      for (var ov = 0u; ov < 16u; ov++) {
-        acc[ov] += mats[m] * v;
-        m++;
-      }
-    }
-  }
-  let x = wg.x * TS + li.x; let y = wg.y * TS + li.y;
-  if (x < P.width && y < P.height) {
-    let base = (y * P.width + x) * 16u;
-    for (var ov = 0u; ov < 16u; ov++) {
-      dst[base + ov] = prelu(acc[ov], vecs[P.slopeBase + ov]);
-    }
-  }
-}
-
-@compute @workgroup_size(8, 8, 1)
 fn conv_last(@builtin(workgroup_id) wg : vec3<u32>,
              @builtin(local_invocation_id) li : vec3<u32>,
              @builtin(local_invocation_index) lidx : u32) {
@@ -165,6 +139,80 @@ fn conv_last(@builtin(workgroup_id) wg : vec3<u32>,
 }
 `;
 
+// Tuned conv_mid generator (see nn-tune.html for the measured variant sweep).
+//   tw, th  threads per workgroup in x/y (workgroup covers tw*px x th pixels)
+//   split   z threads per pixel, each computing 16/split output vec4s —
+//           smaller accumulator arrays and more resident threads (occupancy)
+//   px      output pixels per thread along x — each weight fetch feeds px FMAs
+function nnMidWgsl({ tw, th, split, px }) {
+  const tileW = tw * px + 2, tileH = th + 2;
+  const tileN = tileW * tileH;
+  const threads = tw * th * split;
+  const ovn = 16 / split;
+  const accs = [];
+  for (let j = 0; j < px; j++) accs.push(`acc${j}`);
+  return NN_PRELUDE + `
+var<workgroup> tileM : array<vec4<f16>, ${tileN * 16}>;
+
+@compute @workgroup_size(${tw}, ${th}, ${split})
+fn conv_mid(@builtin(workgroup_id) wg : vec3<u32>,
+            @builtin(local_invocation_id) li : vec3<u32>,
+            @builtin(local_invocation_index) lidx : u32) {
+  let iw = i32(P.width); let ih = i32(P.height);
+  let x0 = i32(wg.x * ${tw * px}u) - 1;
+  let y0 = i32(wg.y * ${th}u) - 1;
+  for (var p = lidx; p < ${tileN}u; p += ${threads}u) {
+    let pxx = x0 + i32(p % ${tileW}u);
+    let pyy = y0 + i32(p / ${tileW}u);
+    if (pxx >= 0 && pxx < iw && pyy >= 0 && pyy < ih) {
+      let base = u32(pyy * iw + pxx) * 16u;
+      for (var c = 0u; c < 16u; c++) { tileM[p * 16u + c] = src[base + c]; }
+    } else {
+      for (var c = 0u; c < 16u; c++) { tileM[p * 16u + c] = vec4<f16>(); }
+    }
+  }
+  workgroupBarrier();
+
+  let ovBase = li.z * ${ovn}u;
+${accs.map((a) => `  var ${a} : array<vec4<f16>, ${ovn}>;`).join("\n")}
+  for (var ov = 0u; ov < ${ovn}u; ov++) {
+    let b = vecs[P.biasBase + ovBase + ov];
+${accs.map((a) => `    ${a}[ov] = b;`).join("\n")}
+  }
+  for (var t = 0u; t < 9u; t++) {
+    let tp = ((li.y + t / 3u) * ${tileW}u + li.x * ${px}u + (t % 3u)) * 16u;
+    for (var iv = 0u; iv < 16u; iv++) {
+${accs.map((a, j) => `      let v${j} = tileM[tp + ${j * 16}u + iv];`).join("\n")}
+      let mb = P.matBase + (t * 16u + iv) * 16u + ovBase;
+      for (var ov = 0u; ov < ${ovn}u; ov++) {
+        let mat = mats[mb + ov];
+${accs.map((a, j) => `        ${a}[ov] += mat * v${j};`).join("\n")}
+      }
+    }
+  }
+  let y = wg.y * ${th}u + li.y;
+  if (y >= P.height) { return; }
+${accs.map((a, j) => `  {
+    let x = wg.x * ${tw * px}u + li.x * ${px}u + ${j}u;
+    if (x < P.width) {
+      let base = (y * P.width + x) * 16u;
+      for (var ov = 0u; ov < ${ovn}u; ov++) {
+        dst[base + ovBase + ov] = prelu(${a}[ov], vecs[P.slopeBase + ovBase + ov]);
+      }
+    }
+  }`).join("\n")}
+}
+`;
+}
+
+// Fastest measured on Apple Silicon (26.5ms vs 54ms for the naive 8x8x1 mid
+// kernel on an M4); needs 23040 bytes of workgroup storage. The fallback
+// fits the 16KB baseline limit and still measures ~1.8x over naive.
+const NN_MID_CFGS = [
+  { tw: 8, th: 8, split: 4, px: 2, sharedBytes: 23040 },
+  { tw: 8, th: 8, split: 2, px: 1, sharedBytes: 12800 },
+];
+
 const NN_BLIT_WGSL = /* wgsl */ `
 @group(0) @binding(0) var t : texture_2d<f32>;
 @vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {
@@ -183,7 +231,11 @@ class NNUpscaler {
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) throw new Error("no WebGPU adapter");
     if (!adapter.features.has("shader-f16")) throw new Error("no shader-f16");
-    const device = await adapter.requestDevice({ requiredFeatures: ["shader-f16"] });
+    const device = await adapter.requestDevice({
+      requiredFeatures: ["shader-f16"],
+      requiredLimits: { maxComputeWorkgroupStorageSize:
+        Math.min(adapter.limits.maxComputeWorkgroupStorageSize, 32768) },
+    });
     const [manifest, weights] = await Promise.all([
       fetch("models/realesr-animevideov3-fp16.mega.json").then((r) => {
         if (!r.ok) throw new Error(`weights manifest: HTTP ${r.status}`);
@@ -304,16 +356,19 @@ class NNUpscaler {
 
   async initPipelines() {
     const device = this.device;
+    this.midCfg = NN_MID_CFGS.find((c) =>
+      c.sharedBytes <= device.limits.maxComputeWorkgroupStorageSize);
     const module = device.createShaderModule({ code: NN_WGSL });
-    const mk = (bgl, entryPoint) => device.createComputePipelineAsync({
+    const midModule = device.createShaderModule({ code: nnMidWgsl(this.midCfg) });
+    const mk = (bgl, m, entryPoint) => device.createComputePipelineAsync({
       layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
-      compute: { module, entryPoint },
+      compute: { module: m, entryPoint },
     });
     const blitModule = device.createShaderModule({ code: NN_BLIT_WGSL });
     [this.pFirst, this.pMid, this.pLast, this.pBlit] = await Promise.all([
-      mk(this.bglFirst, "conv_first"),
-      mk(this.bglMid, "conv_mid"),
-      mk(this.bglLast, "conv_last"),
+      mk(this.bglFirst, module, "conv_first"),
+      mk(this.bglMid, midModule, "conv_mid"),
+      mk(this.bglLast, module, "conv_last"),
       device.createRenderPipelineAsync({
         layout: "auto",
         vertex: { module: blitModule, entryPoint: "vs" },
@@ -343,6 +398,8 @@ class NNUpscaler {
         { bytesPerRow: NN_W * 4 }, [NN_W, NN_H]);
 
       const gx = Math.ceil(NN_W / 8), gy = Math.ceil(NN_H / 8);
+      const mgx = Math.ceil(NN_W / (this.midCfg.tw * this.midCfg.px));
+      const mgy = Math.ceil(NN_H / this.midCfg.th);
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
       pass.setPipeline(this.pFirst);
@@ -352,7 +409,7 @@ class NNUpscaler {
       for (let i = 0; i < 16; i++) {
         pass.setBindGroup(0, i % 2 === 0 ? this.bgMidAB : this.bgMidBA,
           [this.uOffsets[1 + i]]);
-        pass.dispatchWorkgroups(gx, gy);
+        pass.dispatchWorkgroups(mgx, mgy);
       }
       pass.setPipeline(this.pLast);
       pass.setBindGroup(0, this.bgLast, [this.uOffsets[17]]);

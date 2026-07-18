@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NN mega kernel tuner</title>
+<style>
+  body { background: #111; color: #ccc; font: 14px/1.5 monospace; padding: 16px; }
+  #log { white-space: pre; }
+</style>
+</head>
+<body>
+<h3>mega kernel conv_mid variants · GPU timestamps · 320x200 → 1280x800</h3>
+<div id="log">loading…</div>
+<script>
+"use strict";
+const W = 320, H = 200, SCALE = 4;
+
+const log = (s) => {
+  document.getElementById("log").textContent += "\n" + s;
+  console.log("[tune]", s);
+};
+
+// Shared WGSL prelude: bindings + Params, used by every module.
+const PRELUDE = /* wgsl */ `
+enable f16;
+
+struct Params {
+  matBase : u32,
+  biasBase : u32,
+  slopeBase : u32,
+  width : u32,
+  height : u32,
+};
+
+@group(0) @binding(0) var<uniform> P : Params;
+@group(0) @binding(1) var<storage, read> mats : array<mat4x4<f16>>;
+@group(0) @binding(2) var<storage, read> vecs : array<vec4<f16>>;
+@group(0) @binding(3) var<storage, read> src : array<vec4<f16>>;
+@group(0) @binding(4) var<storage, read_write> dst : array<vec4<f16>>;
+@group(0) @binding(5) var inputTex : texture_2d<f32>;
+@group(0) @binding(6) var outTex : texture_storage_2d<rgba8unorm, write>;
+
+fn prelu(a : vec4<f16>, s : vec4<f16>) -> vec4<f16> {
+  return max(a, vec4<f16>()) + s * min(a, vec4<f16>());
+}
+`;
+
+// Baseline conv_first / conv_last (8x8 workgroup, 1 px/thread) shared by all
+// variants — only conv_mid (16 of the 18 layers, ~90% of the cost) varies.
+const FIRST_LAST_WGSL = PRELUDE + /* wgsl */ `
+var<workgroup> tile1 : array<vec4<f16>, 100>;
+var<workgroup> tileL : array<vec4<f16>, 1600>;
+
+@compute @workgroup_size(8, 8, 1)
+fn conv_first(@builtin(workgroup_id) wg : vec3<u32>,
+              @builtin(local_invocation_id) li : vec3<u32>,
+              @builtin(local_invocation_index) lidx : u32) {
+  let iw = i32(P.width); let ih = i32(P.height);
+  let x0 = i32(wg.x * 8u) - 1; let y0 = i32(wg.y * 8u) - 1;
+  for (var p = lidx; p < 100u; p += 64u) {
+    let px = x0 + i32(p % 10u);
+    let py = y0 + i32(p / 10u);
+    var v = vec4<f16>();
+    if (px >= 0 && px < iw && py >= 0 && py < ih) {
+      let t = textureLoad(inputTex, vec2<i32>(px, py), 0);
+      v = vec4<f16>(vec4<f32>(t.rgb, 0.0));
+    }
+    tile1[p] = v;
+  }
+  workgroupBarrier();
+
+  var acc : array<vec4<f16>, 16>;
+  for (var ov = 0u; ov < 16u; ov++) { acc[ov] = vecs[P.biasBase + ov]; }
+  var m = P.matBase;
+  for (var t = 0u; t < 9u; t++) {
+    let v = tile1[(li.y + t / 3u) * 10u + li.x + (t % 3u)];
+    for (var ov = 0u; ov < 16u; ov++) {
+      acc[ov] += mats[m] * v;
+      m++;
+    }
+  }
+  let x = wg.x * 8u + li.x; let y = wg.y * 8u + li.y;
+  if (x < P.width && y < P.height) {
+    let base = (y * P.width + x) * 16u;
+    for (var ov = 0u; ov < 16u; ov++) {
+      dst[base + ov] = prelu(acc[ov], vecs[P.slopeBase + ov]);
+    }
+  }
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn conv_last(@builtin(workgroup_id) wg : vec3<u32>,
+             @builtin(local_invocation_id) li : vec3<u32>,
+             @builtin(local_invocation_index) lidx : u32) {
+  let iw = i32(P.width); let ih = i32(P.height);
+  let x0 = i32(wg.x * 8u) - 1; let y0 = i32(wg.y * 8u) - 1;
+  for (var p = lidx; p < 100u; p += 64u) {
+    let px = x0 + i32(p % 10u);
+    let py = y0 + i32(p / 10u);
+    if (px >= 0 && px < iw && py >= 0 && py < ih) {
+      let base = u32(py * iw + px) * 16u;
+      for (var c = 0u; c < 16u; c++) { tileL[p * 16u + c] = src[base + c]; }
+    } else {
+      for (var c = 0u; c < 16u; c++) { tileL[p * 16u + c] = vec4<f16>(); }
+    }
+  }
+  workgroupBarrier();
+
+  var acc : array<vec4<f16>, 12>;
+  for (var ov = 0u; ov < 12u; ov++) { acc[ov] = vecs[P.biasBase + ov]; }
+  var m = P.matBase;
+  for (var t = 0u; t < 9u; t++) {
+    let tp = ((li.y + t / 3u) * 10u + li.x + (t % 3u)) * 16u;
+    for (var iv = 0u; iv < 16u; iv++) {
+      let v = tileL[tp + iv];
+      for (var ov = 0u; ov < 12u; ov++) {
+        acc[ov] += mats[m] * v;
+        m++;
+      }
+    }
+  }
+  let x = wg.x * 8u + li.x; let y = wg.y * 8u + li.y;
+  if (x < P.width && y < P.height) {
+    let res = textureLoad(inputTex, vec2<i32>(i32(x), i32(y)), 0).rgb;
+    for (var by = 0u; by < 4u; by++) {
+      for (var bx = 0u; bx < 4u; bx++) {
+        let rgb = vec3<f32>(f32(acc[by][bx]), f32(acc[4u + by][bx]),
+                            f32(acc[8u + by][bx])) + res;
+        textureStore(outTex, vec2<i32>(i32(x * 4u + bx), i32(y * 4u + by)),
+                     vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0));
+      }
+    }
+  }
+}
+
+// Channel-split conv_last: 2 threads per pixel, thread z computing the
+// out-vec4 groups with ov % 2 == z (6 of 12). The pixel-shuffle gather for
+// HR row by needs groups {by, by+4, by+8}, all congruent mod 2, so thread z
+// stores the HR rows with by % 2 == z and stays self-contained.
+@compute @workgroup_size(8, 8, 2)
+fn conv_last2(@builtin(workgroup_id) wg : vec3<u32>,
+              @builtin(local_invocation_id) li : vec3<u32>,
+              @builtin(local_invocation_index) lidx : u32) {
+  let iw = i32(P.width); let ih = i32(P.height);
+  let x0 = i32(wg.x * 8u) - 1; let y0 = i32(wg.y * 8u) - 1;
+  for (var p = lidx; p < 100u; p += 128u) {
+    let px = x0 + i32(p % 10u);
+    let py = y0 + i32(p / 10u);
+    if (px >= 0 && px < iw && py >= 0 && py < ih) {
+      let base = u32(py * iw + px) * 16u;
+      for (var c = 0u; c < 16u; c++) { tileL[p * 16u + c] = src[base + c]; }
+    } else {
+      for (var c = 0u; c < 16u; c++) { tileL[p * 16u + c] = vec4<f16>(); }
+    }
+  }
+  workgroupBarrier();
+
+  let z = li.z;
+  var acc : array<vec4<f16>, 6>;   // acc[k] = out-vec4 group z + 2k
+  for (var k = 0u; k < 6u; k++) { acc[k] = vecs[P.biasBase + z + 2u * k]; }
+  for (var t = 0u; t < 9u; t++) {
+    let tp = ((li.y + t / 3u) * 10u + li.x + (t % 3u)) * 16u;
+    for (var iv = 0u; iv < 16u; iv++) {
+      let v = tileL[tp + iv];
+      let mb = P.matBase + (t * 16u + iv) * 12u + z;
+      for (var k = 0u; k < 6u; k++) {
+        acc[k] += mats[mb + 2u * k] * v;
+      }
+    }
+  }
+  let x = wg.x * 8u + li.x; let y = wg.y * 8u + li.y;
+  if (x < P.width && y < P.height) {
+    let res = textureLoad(inputTex, vec2<i32>(i32(x), i32(y)), 0).rgb;
+    for (var r = 0u; r < 2u; r++) {
+      let by = z + 2u * r;
+      for (var bx = 0u; bx < 4u; bx++) {
+        let rgb = vec3<f32>(f32(acc[r][bx]), f32(acc[r + 2u][bx]),
+                            f32(acc[r + 4u][bx])) + res;
+        textureStore(outTex, vec2<i32>(i32(x * 4u + bx), i32(y * 4u + by)),
+                     vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0));
+      }
+    }
+  }
+}
+`;
+
+// Parameterized conv_mid generator.
+//   tw, th   threads per workgroup in x/y (output pixels th rows, tw*px cols)
+//   split    z threads sharing one pixel, each computing 16/split out-vec4s
+//   px       output pixels per thread along x
+//   wshared  stage each tap's 256 weight mats in workgroup memory
+function midWgsl({ tw, th, split = 1, px = 1, wshared = false, unroll = 1 }) {
+  const tileW = tw * px + 2, tileH = th + 2;
+  const tileN = tileW * tileH;
+  const threads = tw * th * split;
+  const ovn = 16 / split;
+  const accs = [];
+  for (let j = 0; j < px; j++) accs.push(`acc${j}`);
+  return PRELUDE + `
+var<workgroup> tile16 : array<vec4<f16>, ${tileN * 16}>;
+${wshared ? "var<workgroup> wtile : array<mat4x4<f16>, 256>;" : ""}
+
+@compute @workgroup_size(${tw}, ${th}, ${split})
+fn conv_mid(@builtin(workgroup_id) wg : vec3<u32>,
+            @builtin(local_invocation_id) li : vec3<u32>,
+            @builtin(local_invocation_index) lidx : u32) {
+  let iw = i32(P.width); let ih = i32(P.height);
+  let x0 = i32(wg.x * ${tw * px}u) - 1;
+  let y0 = i32(wg.y * ${th}u) - 1;
+  for (var p = lidx; p < ${tileN}u; p += ${threads}u) {
+    let pxx = x0 + i32(p % ${tileW}u);
+    let pyy = y0 + i32(p / ${tileW}u);
+    if (pxx >= 0 && pxx < iw && pyy >= 0 && pyy < ih) {
+      let base = u32(pyy * iw + pxx) * 16u;
+      for (var c = 0u; c < 16u; c++) { tile16[p * 16u + c] = src[base + c]; }
+    } else {
+      for (var c = 0u; c < 16u; c++) { tile16[p * 16u + c] = vec4<f16>(); }
+    }
+  }
+  workgroupBarrier();
+
+  let ovBase = li.z * ${ovn}u;
+${accs.map((a) => `  var ${a} : array<vec4<f16>, ${ovn}>;`).join("\n")}
+  for (var ov = 0u; ov < ${ovn}u; ov++) {
+    let b = vecs[P.biasBase + ovBase + ov];
+${accs.map((a) => `    ${a}[ov] = b;`).join("\n")}
+  }
+  for (var t = 0u; t < 9u; t++) {
+${wshared ? `    workgroupBarrier();
+    for (var wI = lidx; wI < 256u; wI += ${threads}u) {
+      wtile[wI] = mats[P.matBase + t * 256u + wI];
+    }
+    workgroupBarrier();
+` : ""}    let tp = ((li.y + t / 3u) * ${tileW}u + li.x * ${px}u + (t % 3u)) * 16u;
+    for (var iv = 0u; iv < 16u; iv += ${unroll}u) {
+${Array.from({ length: unroll }, (_, k) => `${accs.map((a, j) =>
+`      let v${j}_${k} = tile16[tp + ${j * 16}u + iv + ${k}u];`).join("\n")}
+      ${wshared
+        ? `let mb${k} = (iv + ${k}u) * 16u + ovBase;`
+        : `let mb${k} = P.matBase + (t * 16u + iv + ${k}u) * 16u + ovBase;`}`).join("\n")}
+      for (var ov = 0u; ov < ${ovn}u; ov++) {
+${Array.from({ length: unroll }, (_, k) =>
+`        let mat${k} = ${wshared ? "wtile" : "mats"}[mb${k} + ov];
+${accs.map((a, j) => `        ${a}[ov] += mat${k} * v${j}_${k};`).join("\n")}`).join("\n")}
+      }
+    }
+  }
+  let y = wg.y * ${th}u + li.y;
+  if (y >= P.height) { return; }
+${accs.map((a, j) => `  {
+    let x = wg.x * ${tw * px}u + li.x * ${px}u + ${j}u;
+    if (x < P.width) {
+      let base = (y * P.width + x) * 16u;
+      for (var ov = 0u; ov < ${ovn}u; ov++) {
+        dst[base + ovBase + ov] = prelu(${a}[ov], vecs[P.slopeBase + ovBase + ov]);
+      }
+    }
+  }`).join("\n")}
+}
+`;
+}
+
+const VARIANTS = [
+  { name: "base-8x8",   tw: 8,  th: 8 },
+  { name: "b16x8",      tw: 16, th: 8 },
+  { name: "s2",         tw: 8,  th: 8, split: 2 },
+  { name: "s4",         tw: 8,  th: 8, split: 4 },
+  { name: "w",          tw: 8,  th: 8, wshared: true },
+  { name: "s2w",        tw: 8,  th: 8, split: 2, wshared: true },
+  { name: "p2",         tw: 8,  th: 8, px: 2 },
+  { name: "s2b16",      tw: 16, th: 8, split: 2 },
+  { name: "s2v",        tw: 8,  th: 16, split: 2 },
+  { name: "s2u2",       tw: 8,  th: 8, split: 2, unroll: 2 },
+  { name: "s2b16u2",    tw: 16, th: 8, split: 2, unroll: 2 },
+  { name: "s4u2",       tw: 8,  th: 8, split: 4, unroll: 2 },
+  { name: "s2L2",       tw: 8,  th: 8, split: 2, last2: true },
+  { name: "s2b16L2",    tw: 16, th: 8, split: 2, last2: true },
+  { name: "s2p2",       tw: 8,  th: 8, split: 2, px: 2 },
+  { name: "s4p2",       tw: 8,  th: 8, split: 4, px: 2 },
+  { name: "s4b16",      tw: 16, th: 4, split: 4 },
+  { name: "s4p4tw4",    tw: 4,  th: 8, split: 4, px: 4 },
+  { name: "s8p2t4",     tw: 8,  th: 4, split: 8, px: 2 },
+  { name: "s4p2w",      tw: 8,  th: 8, split: 4, px: 2, wshared: true },
+];
+
+async function main() {
+  document.getElementById("log").textContent = "";
+  if (!navigator.gpu) { log("ERROR no WebGPU"); return; }
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter || !adapter.features.has("shader-f16")) { log("ERROR no f16"); return; }
+  const features = ["shader-f16"];
+  if (adapter.features.has("timestamp-query")) features.push("timestamp-query");
+  const wgMem = Math.min(adapter.limits.maxComputeWorkgroupStorageSize, 32768);
+  const device = await adapter.requestDevice({
+    requiredFeatures: features,
+    requiredLimits: { maxComputeWorkgroupStorageSize: wgMem },
+  });
+  device.addEventListener("uncapturederror", (e) => log("GPU ERROR " + e.error.message));
+  log(`device ok, wg storage ${wgMem}, ${features.join(",")}`);
+
+  const [manifest, weights, blob] = await Promise.all([
+    fetch("models/realesr-animevideov3-fp16.mega.json").then((r) => r.json()),
+    fetch("models/realesr-animevideov3-fp16.mega.bin").then((r) => r.arrayBuffer()),
+    fetch("nn-bench-input.png").then((r) => r.blob()),
+  ]);
+  const bmp = await createImageBitmap(blob);
+  const cnv = document.createElement("canvas");
+  cnv.width = W; cnv.height = H;
+  cnv.getContext("2d").drawImage(bmp, 0, 0);
+
+  const C = GPUShaderStage.COMPUTE;
+  const uni = { buffer: { type: "uniform", hasDynamicOffset: true } };
+  const ro = { buffer: { type: "read-only-storage" } };
+  const rw = { buffer: { type: "storage" } };
+  const bglFirst = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: C, ...uni },
+    { binding: 1, visibility: C, ...ro },
+    { binding: 2, visibility: C, ...ro },
+    { binding: 4, visibility: C, ...rw },
+    { binding: 5, visibility: C, texture: {} },
+  ]});
+  const bglMid = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: C, ...uni },
+    { binding: 1, visibility: C, ...ro },
+    { binding: 2, visibility: C, ...ro },
+    { binding: 3, visibility: C, ...ro },
+    { binding: 4, visibility: C, ...rw },
+  ]});
+  const bglLast = device.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: C, ...uni },
+    { binding: 1, visibility: C, ...ro },
+    { binding: 2, visibility: C, ...ro },
+    { binding: 3, visibility: C, ...ro },
+    { binding: 5, visibility: C, texture: {} },
+    { binding: 6, visibility: C,
+      storageTexture: { access: "write-only", format: "rgba8unorm" } },
+  ]});
+
+  const nLayers = manifest.layers.length;
+  const ubuf = device.createBuffer({
+    size: nLayers * 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const udata = new Uint32Array(nLayers * 64);
+  manifest.layers.forEach((l, i) => {
+    udata.set([l.matBase, l.biasBase, l.slopeBase, W, H], i * 64);
+  });
+  device.queue.writeBuffer(ubuf, 0, udata);
+  const wbuf = device.createBuffer({
+    size: weights.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  device.queue.writeBuffer(wbuf, 0, weights);
+  const actSize = W * H * 16 * 8;
+  const actA = device.createBuffer({ size: actSize, usage: GPUBufferUsage.STORAGE });
+  const actB = device.createBuffer({ size: actSize, usage: GPUBufferUsage.STORAGE });
+  const inputTex = device.createTexture({
+    size: [W, H], format: "rgba8unorm",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST |
+           GPUTextureUsage.RENDER_ATTACHMENT });
+  device.queue.copyExternalImageToTexture({ source: cnv }, { texture: inputTex }, [W, H]);
+  const outTex = device.createTexture({
+    size: [W * SCALE, H * SCALE], format: "rgba8unorm",
+    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
+
+  const u = { binding: 0, resource: { buffer: ubuf, size: 256 } };
+  const mats = { binding: 1, resource: { buffer: wbuf } };
+  const vecs = { binding: 2, resource: { buffer: wbuf } };
+  const bgFirst = device.createBindGroup({ layout: bglFirst, entries: [
+    u, mats, vecs, { binding: 4, resource: { buffer: actA } },
+    { binding: 5, resource: inputTex.createView() },
+  ]});
+  const bgMidAB = device.createBindGroup({ layout: bglMid, entries: [
+    u, mats, vecs, { binding: 3, resource: { buffer: actA } },
+    { binding: 4, resource: { buffer: actB } },
+  ]});
+  const bgMidBA = device.createBindGroup({ layout: bglMid, entries: [
+    u, mats, vecs, { binding: 3, resource: { buffer: actB } },
+    { binding: 4, resource: { buffer: actA } },
+  ]});
+  const bgLast = device.createBindGroup({ layout: bglLast, entries: [
+    u, mats, vecs, { binding: 3, resource: { buffer: actA } },
+    { binding: 5, resource: inputTex.createView() },
+    { binding: 6, resource: outTex.createView() },
+  ]});
+
+  const mkPipe = (bgl, code, entryPoint) => device.createComputePipelineAsync({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+    compute: { module: device.createShaderModule({ code }), entryPoint },
+  });
+  const [pFirst, pLast, pLast2] = await Promise.all([
+    mkPipe(bglFirst, FIRST_LAST_WGSL, "conv_first"),
+    mkPipe(bglLast, FIRST_LAST_WGSL, "conv_last"),
+    mkPipe(bglLast, FIRST_LAST_WGSL, "conv_last2"),
+  ]);
+
+  let qs = null, qResolve = null, qRead = null;
+  if (features.includes("timestamp-query")) {
+    qs = device.createQuerySet({ type: "timestamp", count: 2 });
+    qResolve = device.createBuffer({
+      size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+    qRead = device.createBuffer({
+      size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  }
+
+  const GX = Math.ceil(W / 8), GY = Math.ceil(H / 8);
+  async function run(pMid, v) {
+    const gx = Math.ceil(W / (v.tw * (v.px || 1)));
+    const gy = Math.ceil(H / v.th);
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass(qs ? { timestampWrites: {
+      querySet: qs, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } } : {});
+    pass.setPipeline(pFirst);
+    pass.setBindGroup(0, bgFirst, [0]);
+    pass.dispatchWorkgroups(GX, GY);
+    pass.setPipeline(pMid);
+    for (let i = 0; i < 16; i++) {
+      pass.setBindGroup(0, i % 2 === 0 ? bgMidAB : bgMidBA, [(1 + i) * 256]);
+      pass.dispatchWorkgroups(gx, gy);
+    }
+    pass.setPipeline(v.last2 ? pLast2 : pLast);
+    pass.setBindGroup(0, bgLast, [17 * 256]);
+    pass.dispatchWorkgroups(GX, GY);
+    pass.end();
+    if (qs) {
+      encoder.resolveQuerySet(qs, 0, 2, qResolve, 0);
+      encoder.copyBufferToBuffer(qResolve, 0, qRead, 0, 16);
+    }
+    device.queue.submit([encoder.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    if (!qs) return null;
+    await qRead.mapAsync(GPUMapMode.READ);
+    const t = new BigInt64Array(qRead.getMappedRange());
+    const ms = Number(t[1] - t[0]) / 1e6;
+    qRead.unmap();
+    return ms;
+  }
+
+  async function readback() {
+    const buf = device.createBuffer({
+      size: W * SCALE * 4 * H * SCALE,
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const encoder = device.createCommandEncoder();
+    encoder.copyTextureToBuffer(
+      { texture: outTex }, { buffer: buf, bytesPerRow: W * SCALE * 4 },
+      [W * SCALE, H * SCALE]);
+    device.queue.submit([encoder.finish()]);
+    await buf.mapAsync(GPUMapMode.READ);
+    const data = new Uint8Array(buf.getMappedRange()).slice();
+    buf.destroy();
+    return data;
+  }
+
+  const only = new URLSearchParams(location.search).get("v");
+  let reference = null;
+  const results = [];
+  for (const v of VARIANTS) {
+    if (only && !only.split(",").includes(v.name)) continue;
+    const shared = (v.tw * (v.px || 1) + 2) * (v.th + 2) * 128 + (v.wshared ? 8192 : 0);
+    if (shared > wgMem) { log(`${v.name}: skipped, needs ${shared}B shared`); continue; }
+    let pMid;
+    try {
+      pMid = await mkPipe(bglMid, midWgsl(v), "conv_mid");
+    } catch (e) {
+      log(`${v.name}: pipeline error: ${e.message || e}`);
+      continue;
+    }
+    const times = [];
+    for (let i = 0; i < 2; i++) await run(pMid, v);          // warmup
+    for (let i = 0; i < 6; i++) times.push(await run(pMid, v));
+    times.sort((a, b) => a - b);
+    const med = times[times.length >> 1];
+    let diff = "-";
+    const out = await readback();
+    if (!reference) {
+      reference = out;
+      diff = "ref";
+    } else {
+      let maxd = 0;
+      for (let i = 0; i < out.length; i++) {
+        const d = Math.abs(out[i] - reference[i]);
+        if (d > maxd) maxd = d;
+      }
+      diff = String(maxd);
+    }
+    results.push({ name: v.name, med, min: times[0] });
+    log(`${v.name.padEnd(10)} gpu ${med.toFixed(2)}ms (min ${times[0].toFixed(2)}) ` +
+        `maxdiff ${diff} shared ${shared}B`);
+  }
+  results.sort((a, b) => a.med - b.med);
+  log("BEST " + JSON.stringify(results.slice(0, 3)));
+}
+
+main().catch((e) => log("ERROR " + (e.stack || e)));
+</script>
+</body>
+</html>
