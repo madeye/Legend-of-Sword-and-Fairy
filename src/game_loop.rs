@@ -17,7 +17,7 @@ use std::time::Duration;
 use web_time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
-use pixels::{Pixels, SurfaceTexture};
+use pixels::{wgpu, Pixels, PixelsBuilder, SurfaceTexture};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::application::ApplicationHandler;
 #[cfg(not(target_arch = "wasm32"))]
@@ -131,10 +131,16 @@ pub(crate) fn render_rgba(
 struct VideoApp {
     window: Option<Arc<Window>>,
     pixels: Option<Pixels<'static>>,
+    /// FP16 neural upscaler sharing the pixels wgpu device. On Linux and
+    /// Windows this is lowered to Vulkan when that backend is selected.
+    upscaler: Option<crate::native_upscale::NativeUpscaler>,
+    surface_size: (u32, u32),
     key_events: Vec<(winit::keyboard::KeyCode, bool)>,
     close_requested: bool,
     /// RGBA staging buffer for the native 720p presentation surface.
     rgba: Vec<u8>,
+    /// Low-resolution input uploaded to the neural compute pipeline.
+    neural_input_rgba: Vec<u8>,
     /// Decoded ImageGen-enhanced opening-menu resource.
     opening_menu_hd: Option<Vec<u8>>,
     /// Original indexed menu background, used as an overlay mask so the live
@@ -157,17 +163,72 @@ impl ApplicationHandler for VideoApp {
             ));
         let window = Arc::new(event_loop.create_window(attrs).expect("create game window"));
         let size = window.inner_size();
-        let texture = SurfaceTexture::new(size.width, size.height, window.clone());
-        let pixels = Pixels::new(DISPLAY_W as u32, DISPLAY_H as u32, texture)
-            .expect("create pixel framebuffer");
+        let neural_enabled = std::env::var_os("RUSTPAL_DISABLE_GPU_UPSCALE").is_none();
+        let make_neural_pixels = |workgroup_storage| {
+            let texture = SurfaceTexture::new(size.width, size.height, window.clone());
+            let limits = wgpu::Limits {
+                max_compute_workgroup_storage_size: workgroup_storage,
+                ..Default::default()
+            };
+            PixelsBuilder::new(DISPLAY_W as u32, DISPLAY_H as u32, texture)
+                .device_descriptor(wgpu::DeviceDescriptor {
+                    label: Some("rustpal native neural upscale device"),
+                    required_features: wgpu::Features::SHADER_F16,
+                    required_limits: limits,
+                    ..Default::default()
+                })
+                .build()
+        };
+        let (pixels, neural_device) = if neural_enabled {
+            match make_neural_pixels(32_768) {
+                Ok(pixels) => (pixels, true),
+                Err(fast_error) => match make_neural_pixels(16_384) {
+                    Ok(pixels) => (pixels, true),
+                    Err(baseline_error) => {
+                        eprintln!(
+                            "rustpal: GPU neural upscale unavailable ({fast_error}; {baseline_error}); using nearest scaling"
+                        );
+                        let texture = SurfaceTexture::new(size.width, size.height, window.clone());
+                        (
+                            Pixels::new(DISPLAY_W as u32, DISPLAY_H as u32, texture)
+                                .expect("create fallback pixel framebuffer"),
+                            false,
+                        )
+                    }
+                },
+            }
+        } else {
+            let texture = SurfaceTexture::new(size.width, size.height, window.clone());
+            (
+                Pixels::new(DISPLAY_W as u32, DISPLAY_H as u32, texture)
+                    .expect("create pixel framebuffer"),
+                false,
+            )
+        };
+        let upscaler = neural_device.then(|| {
+            crate::native_upscale::NativeUpscaler::new(
+                pixels.device(),
+                pixels.surface_texture_format(),
+            )
+        });
+        if upscaler.is_some() {
+            let info = pixels.adapter().get_info();
+            eprintln!(
+                "rustpal: native neural upscale enabled on {} ({:?})",
+                info.name, info.backend
+            );
+        }
         self.window = Some(window);
         self.pixels = Some(pixels);
+        self.upscaler = upscaler;
+        self.surface_size = (size.width.max(1), size.height.max(1));
     }
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => self.close_requested = true,
             WindowEvent::Resized(size) => {
+                self.surface_size = (size.width.max(1), size.height.max(1));
                 if let Some(p) = self.pixels.as_mut() {
                     let _ = p.resize_surface(size.width.max(1), size.height.max(1));
                 }
@@ -205,9 +266,17 @@ impl Video {
             app: VideoApp {
                 window: None,
                 pixels: None,
+                upscaler: None,
+                surface_size: (DISPLAY_W as u32, DISPLAY_H as u32),
                 key_events: Vec::new(),
                 close_requested: false,
                 rgba: vec![0; DISPLAY_W * DISPLAY_H * 4],
+                neural_input_rgba: vec![
+                    0;
+                    crate::native_upscale::INPUT_W as usize
+                        * crate::native_upscale::INPUT_H as usize
+                        * 4
+                ],
                 opening_menu_hd: decode_opening_menu_hd().ok(),
                 enhanced_baseline: None,
                 enhanced_target_palette: None,
@@ -227,6 +296,29 @@ impl Video {
         let Some(pixels) = self.app.pixels.as_mut() else {
             return;
         };
+        // Preserve the specialized enhanced opening-menu compositor. All
+        // ordinary gameplay frames stay low-resolution until this point and
+        // run through the neural network on the native GPU.
+        if self.app.enhanced_baseline.is_none() {
+            if let Some(upscaler) = self.app.upscaler.as_ref() {
+                render_rgba(surf, palette, shake, &mut self.app.neural_input_rgba);
+                upscaler.upload_input(pixels.queue(), &self.app.neural_input_rgba);
+                let (viewport_x, viewport_y, viewport_width, viewport_height) =
+                    fit_neural_viewport(self.app.surface_size.0, self.app.surface_size.1);
+                let _ = pixels.render_with(|encoder, target, _context| {
+                    upscaler.encode(
+                        encoder,
+                        target,
+                        viewport_x,
+                        viewport_y,
+                        viewport_width,
+                        viewport_height,
+                    );
+                    Ok(())
+                });
+                return;
+            }
+        }
         render_720p(
             surf,
             palette,
@@ -256,6 +348,21 @@ impl Video {
     /// Whether the user asked to close the window.
     fn close_requested(&self) -> bool {
         self.app.close_requested
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fit_neural_viewport(surface_width: u32, surface_height: u32) -> (f32, f32, f32, f32) {
+    let surface_width = surface_width.max(1) as f32;
+    let surface_height = surface_height.max(1) as f32;
+    let content_aspect = SCREEN_W as f32 / SCREEN_H as f32;
+    let surface_aspect = surface_width / surface_height;
+    if surface_aspect > content_aspect {
+        let width = surface_height * content_aspect;
+        ((surface_width - width) * 0.5, 0.0, width, surface_height)
+    } else {
+        let height = surface_width / content_aspect;
+        (0.0, (surface_height - height) * 0.5, surface_width, height)
     }
 }
 

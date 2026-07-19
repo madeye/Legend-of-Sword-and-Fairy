@@ -14,6 +14,8 @@ pub mod itemmenu;
 pub mod magicmenu;
 pub mod map;
 pub mod mkf;
+#[cfg(not(target_arch = "wasm32"))]
+mod native_upscale;
 pub mod opl;
 pub mod palette;
 pub mod play;
