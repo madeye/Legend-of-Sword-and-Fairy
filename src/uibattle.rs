@@ -23,6 +23,7 @@ use crate::input::{
     KEY_AUTO, KEY_DEFEND, KEY_DOWN, KEY_FLEE, KEY_FORCE, KEY_LEFT, KEY_MENU, KEY_REPEAT, KEY_RIGHT,
     KEY_SEARCH, KEY_STATUS, KEY_THROW_ITEM, KEY_UP, KEY_USE_ITEM,
 };
+use crate::surface;
 
 // uibattle.c file statics.
 static S_FRAME: AtomicU32 = AtomicU32::new(0);
@@ -35,6 +36,34 @@ const UI_ACTION_MAGIC: u8 = 1;
 const UI_ACTION_COOP_MAGIC: u8 = 2;
 const UI_ACTION_MISC: u8 = 3;
 
+// Shared UI sprite sheet frames (ui.h / uibattle.h SPRITENUM_*).
+const SPRITENUM_PLAYERINFOBOX: usize = 18;
+const SPRITENUM_SLASH: usize = 39;
+const SPRITENUM_BATTLEICON_ATTACK: usize = 40;
+const SPRITENUM_BATTLEICON_MAGIC: usize = 41;
+const SPRITENUM_BATTLEICON_COOPMAGIC: usize = 42;
+const SPRITENUM_BATTLEICON_MISCMENU: usize = 43;
+const SPRITENUM_PLAYERFACE_FIRST: usize = 48;
+const SPRITENUM_BATTLE_ARROW_SELECTEDPLAYER_RED: usize = 66;
+const SPRITENUM_BATTLE_ARROW_SELECTEDPLAYER: usize = 67;
+const SPRITENUM_BATTLE_ARROW_CURRENTPLAYER_RED: usize = 68;
+const SPRITENUM_BATTLE_ARROW_CURRENTPLAYER: usize = 69;
+
+/// BATTLEUI_LABEL_AUTO ("auto attack" word).
+const BATTLEUI_LABEL_AUTO: u16 = 56;
+
+/// The four battle menu icons: (sprite, position, action id).
+const BATTLE_MENU_ICONS: [(usize, (i32, i32), u8); 4] = [
+    (SPRITENUM_BATTLEICON_ATTACK, (27, 140), UI_ACTION_ATTACK),
+    (SPRITENUM_BATTLEICON_MAGIC, (0, 155), UI_ACTION_MAGIC),
+    (
+        SPRITENUM_BATTLEICON_COOPMAGIC,
+        (54, 155),
+        UI_ACTION_COOP_MAGIC,
+    ),
+    (SPRITENUM_BATTLEICON_MISCMENU, (27, 170), UI_ACTION_MISC),
+];
+
 // ===========================================================================
 // PAL_PlayerInfoBox.
 // ===========================================================================
@@ -42,12 +71,7 @@ const UI_ACTION_MISC: u8 = 3;
 /// PAL_PlayerInfoBox: HP/MP box for one player.  Matches the C signature (no
 /// battle argument — the C reads only the passed time-meter and the player
 /// role).  This is the single implementation, shared by the battle UI and by
-/// the save-slot / status flows in uigame.rs.
-///
-/// The numeric HP/MP go through the `ui.rs` `draw_number` contract.  The
-/// decorative box background sprite, player face and time-meter bar
-/// (`SPRITENUM_PLAYERINFOBOX` / `PLAYERFACE` / `SLASH` from the shared UI
-/// sprite sheet) are cosmetic and intentionally not drawn here.
+/// the save-slot / status flows in uigame.rs.  Classic mode: no time meter.
 pub fn player_info_box(
     engine: &mut Engine,
     pos: (i32, i32),
@@ -56,6 +80,57 @@ pub fn player_info_box(
     _time_meter_color: u8,
     _update: bool,
 ) {
+    // On-box status markers (confused/slow/sleep/silence): word, offset,
+    // color — the remaining statuses have no marker in the C table.
+    const STATUS_WORD: [u16; 4] = [0x1D, 0x1B, 0x1C, 0x1A];
+    const STATUS_POS: [(i32, i32); 4] = [(35, 19), (44, 12), (54, 1), (55, 20)];
+    const STATUS_COLOR: [u8; 4] = [0x5F, 0xBF, 0x0E, 0x3C];
+
+    // The box background.
+    if let Some(f) = surface::sprite_frame(&engine.ui.sprite_ui, SPRITENUM_PLAYERINFOBOX) {
+        engine.screen.blit_rle(f, pos.0, pos.1);
+    }
+
+    // The player face, tinted by the strongest active poison (dead players
+    // are drawn in black/white).
+    let mut max_level = 0u16;
+    let mut poison_color = 0xFFu16;
+    let party_index = (0..=engine.globals.max_party_member_index as usize)
+        .find(|&i| engine.globals.party[i].player_role as usize == player_role);
+    if let Some(pi) = party_index {
+        for i in 0..crate::global::MAX_POISONS {
+            let w = engine.globals.poison_status[i][pi].poison_id;
+            if w != 0 && engine.globals.game.objects[w as usize].poison_level() <= 3 {
+                let level = engine.globals.game.objects[w as usize].poison_level();
+                if level >= max_level {
+                    max_level = level;
+                    poison_color = engine.globals.game.objects[w as usize].poison_color();
+                }
+            }
+        }
+    }
+    if engine.globals.game.player_roles.hp[player_role] == 0 {
+        poison_color = 0;
+    }
+    if let Some(f) = surface::sprite_frame(
+        &engine.ui.sprite_ui,
+        SPRITENUM_PLAYERFACE_FIRST + player_role,
+    ) {
+        if poison_color == 0xFF {
+            engine.screen.blit_rle(f, pos.0 - 2, pos.1 - 4);
+        } else {
+            engine
+                .screen
+                .blit_rle_mono_color(f, pos.0 - 2, pos.1 - 4, poison_color as u8, 0);
+        }
+    }
+
+    // HP / MP with the dividing slashes (classic layout).
+    if let Some(f) = surface::sprite_frame(&engine.ui.sprite_ui, SPRITENUM_SLASH) {
+        engine.screen.blit_rle(f, pos.0 + 49, pos.1 + 6);
+        engine.screen.blit_rle(f, pos.0 + 49, pos.1 + 22);
+    }
+
     let max_hp = engine.globals.game.player_roles.max_hp[player_role] as u32;
     let hp = engine.globals.game.player_roles.hp[player_role] as u32;
     let max_mp = engine.globals.game.player_roles.max_mp[player_role] as u32;
@@ -88,6 +163,22 @@ pub fn player_info_box(
         crate::ui::NumColor::Cyan,
         crate::ui::NumAlign::Right,
     );
+
+    // Status markers.
+    if engine.globals.game.player_roles.hp[player_role] > 0 {
+        for i in 0..STATUS_WORD.len() {
+            if engine.globals.player_status[player_role][i] > 0 {
+                let word = engine.texts.word(STATUS_WORD[i] as usize);
+                engine.draw_text(
+                    &word,
+                    (pos.0 + STATUS_POS[i].0, pos.1 + STATUS_POS[i].1),
+                    STATUS_COLOR[i],
+                    true,
+                    false,
+                );
+            }
+        }
+    }
 }
 
 // ===========================================================================
@@ -200,8 +291,37 @@ fn ui_update_body(engine: &mut Engine, battle: &mut Battle) {
     let s_frame = S_FRAME.load(Ordering::Relaxed);
     let max_party = engine.globals.max_party_member_index as usize;
 
-    if battle.ui.auto_attack && !engine.globals.auto_battle && engine.input.pressed(KEY_MENU) {
-        battle.ui.auto_attack = false;
+    // Demo-recording pilot: emulate a player pressing "confirm" at a human
+    // cadence whenever the UI waits for a command (used by the demo
+    // recording example; never set in normal play).
+    let now = engine.ticks();
+    if let Some(next) = engine.demo_pilot.as_mut() {
+        let waiting = (battle.ui.state == BattleUiState::SelectMove
+            && battle.ui.menu_state == BattleMenuState::Main)
+            || battle.ui.state == BattleUiState::SelectTargetEnemy;
+        if !waiting {
+            *next = (*next).max(now + 700);
+        } else if now >= *next {
+            engine.input.key_press |= KEY_SEARCH;
+            *next = now + 800;
+        }
+    }
+
+    if battle.ui.auto_attack && !engine.globals.auto_battle {
+        if engine.input.pressed(KEY_MENU) {
+            battle.ui.auto_attack = false;
+        } else {
+            // Draw the "auto attack" indicator.
+            let text = engine.texts.word(BATTLEUI_LABEL_AUTO as usize);
+            let w = engine.text_width(&text);
+            engine.draw_text(
+                &text,
+                (312 - w, 10),
+                crate::ui::MENUITEM_COLOR_CONFIRMED,
+                true,
+                false,
+            );
+        }
     }
 
     // Auto-battle driver.
@@ -315,7 +435,16 @@ fn ui_update_body(engine: &mut Engine, battle: &mut Battle) {
             return;
         }
 
-        // (Draw the "current player" arrow — cross-module gpSpriteUI, skipped.)
+        // Draw the arrow on the current player's head.
+        let spr = if s_frame & 1 != 0 {
+            SPRITENUM_BATTLE_ARROW_CURRENTPLAYER
+        } else {
+            SPRITENUM_BATTLE_ARROW_CURRENTPLAYER_RED
+        };
+        let (px, py) = crate::battle::PLAYER_POS[max_party][battle.ui.cur_player_index as usize];
+        if let Some(f) = surface::sprite_frame(&engine.ui.sprite_ui, spr) {
+            engine.screen.blit_rle(f, px - 8, py - 74);
+        }
     }
 
     match battle.ui.state {
@@ -335,7 +464,7 @@ fn ui_update_body(engine: &mut Engine, battle: &mut Battle) {
 
         BattleUiState::SelectTargetEnemy => ui_select_target_enemy(engine, battle, s_frame),
 
-        BattleUiState::SelectTargetPlayer => ui_select_target_player(engine, battle),
+        BattleUiState::SelectTargetPlayer => ui_select_target_player(engine, battle, s_frame),
 
         BattleUiState::SelectTargetEnemyAll => {
             // Classic: no manual selection.
@@ -379,6 +508,21 @@ fn ui_select_move(engine: &mut Engine, battle: &mut Battle) {
     };
     if !ui_is_action_valid(engine, battle, action_of(battle.ui.selected_action)) {
         battle.ui.selected_action = 0;
+    }
+
+    // Draw the four command icons: the selected one in full color, the other
+    // valid ones dimmed, invalid ones darker still.
+    for (i, &(spr, pos, action)) in BATTLE_MENU_ICONS.iter().enumerate() {
+        let valid = ui_is_action_valid(engine, battle, action);
+        if let Some(f) = surface::sprite_frame(&engine.ui.sprite_ui, spr) {
+            if battle.ui.selected_action as usize == i {
+                engine.screen.blit_rle(f, pos.0, pos.1);
+            } else if valid {
+                engine.screen.blit_rle_mono_color(f, pos.0, pos.1, 0, -4);
+            } else {
+                engine.screen.blit_rle_mono_color(f, pos.0, pos.1, 0x10, -4);
+            }
+        }
     }
 
     match battle.ui.menu_state {
@@ -559,7 +703,7 @@ fn ui_select_move(engine: &mut Engine, battle: &mut Battle) {
 }
 
 /// kBattleUISelectTargetEnemy handling (classic).
-fn ui_select_target_enemy(engine: &mut Engine, battle: &mut Battle, _s_frame: u32) {
+fn ui_select_target_enemy(engine: &mut Engine, battle: &mut Battle, s_frame: u32) {
     let mut x: i32 = -1;
     let mut y = 0;
     for i in 0..=battle.max_enemy_index as usize {
@@ -606,6 +750,16 @@ fn ui_select_target_enemy(engine: &mut Engine, battle: &mut Battle, _s_frame: u3
         battle.ui.selected_index %= x + 1;
     }
 
+    // Highlight the selected enemy (blinking brighter on odd frames).
+    if s_frame & 1 != 0 {
+        let en = &battle.enemy[battle.ui.selected_index as usize];
+        if let Some(f) = surface::sprite_frame(&en.sprite, en.current_frame as usize) {
+            let hx = en.pos.0 - surface::rle_width(f) as i32 / 2;
+            let hy = en.pos.1 - surface::rle_height(f) as i32;
+            crate::battle::blit_rle_color_shift(&mut engine.screen, f, hx, hy, 7);
+        }
+    }
+
     if engine.input.pressed(KEY_MENU) {
         battle.ui.state = BattleUiState::SelectMove;
     } else if engine.input.pressed(KEY_SEARCH) {
@@ -640,13 +794,30 @@ fn ui_select_target_enemy(engine: &mut Engine, battle: &mut Battle, _s_frame: u3
 }
 
 /// kBattleUISelectTargetPlayer handling (classic).
-fn ui_select_target_player(engine: &mut Engine, battle: &mut Battle) {
+fn ui_select_target_player(engine: &mut Engine, battle: &mut Battle, s_frame: u32) {
     if engine.globals.max_party_member_index == 0 {
         battle.ui.selected_index = 0;
         battle_commit_action(engine, battle, false);
         return;
     }
     let max_party = engine.globals.max_party_member_index as i32;
+
+    // Gray the command icons and draw the arrow above the selected player.
+    for &(spr, pos, _) in BATTLE_MENU_ICONS.iter() {
+        if let Some(f) = surface::sprite_frame(&engine.ui.sprite_ui, spr) {
+            engine.screen.blit_rle_mono_color(f, pos.0, pos.1, 0, -4);
+        }
+    }
+    let spr = if s_frame & 1 != 0 {
+        SPRITENUM_BATTLE_ARROW_SELECTEDPLAYER_RED
+    } else {
+        SPRITENUM_BATTLE_ARROW_SELECTEDPLAYER
+    };
+    let (px, py) = crate::battle::PLAYER_POS[max_party as usize][battle.ui.selected_index as usize];
+    if let Some(f) = surface::sprite_frame(&engine.ui.sprite_ui, spr) {
+        engine.screen.blit_rle(f, px - 8, py - 67);
+    }
+
     if engine.input.pressed(KEY_MENU) {
         battle.ui.state = BattleUiState::SelectMove;
     } else if engine.input.pressed(KEY_SEARCH) {

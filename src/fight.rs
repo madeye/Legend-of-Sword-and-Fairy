@@ -942,23 +942,193 @@ fn detect_magic_target_change(globals: &Globals, magic_number: usize, target: i1
 // Animations (rendering only; no-op when instant — no gameplay effect).
 // ===========================================================================
 
-/// PAL_BattleShowPlayerAttackAnim.
+/// PAL_BattleShowPlayerAttackAnim: dash up to the target, swing with the
+/// weapon-trail effect sprite overlaid on the enemy (white-flashing it and
+/// popping the damage number), then knock the enemy back with a small bounce.
 fn show_player_attack_anim(
     engine: &mut Engine,
     battle: &mut Battle,
     player_index: usize,
-    _critical: bool,
+    critical: bool,
 ) {
     if battle.instant {
         return;
     }
+    let role = engine.globals.party[player_index].player_role as usize;
+    let target = battle.player[player_index].action.target;
+
+    let (mut enemy_x, mut enemy_y) = (150i32, 100i32);
+    let mut enemy_h = 0i32;
+    let mut dist = 0i32;
+    if target != -1 {
+        let t = target as usize;
+        enemy_x = battle.enemy[t].pos.0;
+        enemy_y = battle.enemy[t].pos.1;
+        enemy_h = crate::surface::sprite_frame(
+            &battle.enemy[t].sprite,
+            battle.enemy[t].current_frame as usize,
+        )
+        .map(|f| crate::surface::rle_height(f) as i32)
+        .unwrap_or(0);
+        if t >= 3 {
+            dist = (t as i32 - player_index as i32) * 8;
+        }
+    }
+
+    let sprite_num = engine.globals.player_battle_sprite(role) as usize;
+    let effect_index = engine
+        .globals
+        .game
+        .battle_effect_index
+        .get(sprite_num)
+        .map(|r| r[1] as usize)
+        .unwrap_or(0)
+        * 3;
+
+    // Attack / critical voice.
+    if engine.globals.game.player_roles.hp[role] > 0 {
+        let snd = if critical {
+            engine.globals.game.player_roles.critical_sound[role]
+        } else {
+            engine.globals.game.player_roles.attack_sound[role]
+        };
+        engine.play_sound(snd as i32);
+    }
+
+    // Dash up to the target in two steps.
+    let mut x = enemy_x - dist + 64;
+    let mut y = enemy_y + dist + 20;
+    let dual_all = engine.globals.player_status[role][STATUS_DUALATTACK] > 0
+        && engine.globals.player_can_attack_all(role);
+    let home =
+        crate::battle::PLAYER_POS[engine.globals.max_party_member_index as usize][player_index];
+    let place = |battle: &mut Battle, x: i32, y: i32| {
+        if dual_all {
+            let (hx, hy) = (home.0 - 8, home.1 - 4);
+            battle.player[player_index].pos = if battle.player[player_index].second_attack {
+                (hx - 12, hy - 8)
+            } else {
+                (hx, hy)
+            };
+        } else {
+            battle.player[player_index].pos = (x, y);
+        }
+    };
+
     battle.player[player_index].current_frame = 8;
+    place(battle, x, y);
     battle_delay(engine, battle, 2, 0, true);
-    battle.player[player_index].current_frame = 9;
+
+    x -= 10;
+    y -= 2;
+    place(battle, x, y);
     battle_delay(engine, battle, 1, 0, true);
-    battle_display_stat_change(engine, battle);
-    battle_backup_stat(engine, battle);
-    battle_delay(engine, battle, 2, 0, true);
+
+    battle.player[player_index].current_frame = 9;
+    engine.play_sound(engine.globals.game.player_roles.weapon_sound[role] as i32);
+
+    let attack_all = engine.globals.player_can_attack_all(role);
+    let mut ex = enemy_x;
+    let mut ey = enemy_y - enemy_h / 3 + 10;
+
+    // The three-frame weapon swing effect over the enemy.
+    let mut time = engine.ticks() + BATTLE_FRAME_TIME;
+    for (i, frame_idx) in (effect_index..effect_index + 3).enumerate() {
+        engine.delay_until(time);
+        time = engine.ticks() + BATTLE_FRAME_TIME;
+
+        // Keep the enemies' idle animations running.
+        for j in 0..=battle.max_enemy_index as usize {
+            if battle.enemy[j].object_id == 0
+                || battle.enemy[j].status[STATUS_SLEEP] > 0
+                || battle.enemy[j].status[STATUS_PARALYZED] > 0
+            {
+                continue;
+            }
+            battle.enemy[j].e.idle_anim_speed = battle.enemy[j].e.idle_anim_speed.wrapping_sub(1);
+            if battle.enemy[j].e.idle_anim_speed == 0 {
+                battle.enemy[j].current_frame += 1;
+                let enemy_id = engine.globals.game.objects[battle.enemy[j].object_id as usize]
+                    .enemy_id() as usize;
+                battle.enemy[j].e.idle_anim_speed =
+                    engine.globals.game.enemies[enemy_id].idle_anim_speed;
+            }
+            if battle.enemy[j].current_frame >= battle.enemy[j].e.idle_frames {
+                battle.enemy[j].current_frame = 0;
+            }
+        }
+
+        make_scene(engine, battle);
+        copy_scene_to_screen(engine, battle);
+
+        if let Some(b) = crate::surface::sprite_frame(&battle.effect_sprite, frame_idx) {
+            let bw = crate::surface::rle_width(b) as i32;
+            let bh = crate::surface::rle_height(b) as i32;
+            if attack_all {
+                for j in 0..MAX_ENEMIES_IN_TEAM {
+                    if battle.enemy[j].object_id == 0 {
+                        continue;
+                    }
+                    let (px, py) =
+                        engine.globals.game.enemy_pos[j][battle.max_enemy_index as usize];
+                    let bx = px as i32;
+                    let by = py as i32 + battle.enemy[j].e.y_pos_offset as i32;
+                    engine.screen.blit_rle(b, bx - bw / 2, by - bh);
+                }
+            } else {
+                engine.screen.blit_rle(b, ex - bw / 2, ey - bh);
+            }
+        }
+        ex -= 16;
+        ey += 16;
+
+        crate::uibattle::ui_update(engine, battle);
+
+        if i == 0 {
+            // Flash the victim white and pop the damage number.
+            if target == -1 {
+                for j in 0..=battle.max_enemy_index as usize {
+                    battle.enemy[j].color_shift = 6;
+                }
+            } else {
+                battle.enemy[target as usize].color_shift = 6;
+            }
+            battle_display_stat_change(engine, battle);
+            battle_backup_stat(engine, battle);
+        }
+
+        engine.video_update();
+
+        if i == 1 {
+            battle.player[player_index].pos.0 += 2;
+            battle.player[player_index].pos.1 += 1;
+        }
+    }
+
+    // Knock the enemy back with a decaying bounce.
+    for j in 0..=battle.max_enemy_index as usize {
+        battle.enemy[j].color_shift = 0;
+    }
+    let mut dist = 8i32;
+    if target == -1 {
+        for _ in 0..3 {
+            for j in 0..=battle.max_enemy_index as usize {
+                battle.enemy[j].pos.0 -= dist;
+            }
+            battle_delay(engine, battle, 1, 0, true);
+            dist /= -2;
+        }
+    } else {
+        let t = target as usize;
+        let (mut kx, mut ky) = battle.enemy[t].pos;
+        for _ in 0..3 {
+            kx -= dist;
+            dist /= -2;
+            ky += dist;
+            battle.enemy[t].pos = (kx, ky);
+            battle_delay(engine, battle, 1, 0, true);
+        }
+    }
 }
 
 /// PAL_BattleShowPlayerUseItemAnim.
@@ -1765,7 +1935,35 @@ pub fn battle_enemy_perform_action(engine: &mut Engine, battle: &mut Battle, ene
             if str_ < 0 {
                 str_ = 0;
             }
+
+            // Step forward twice, then run the casting gesture frames.
+            battle.enemy[ei].pos.0 += 12;
+            battle.enemy[ei].pos.1 += 6;
+            battle_delay(engine, battle, 1, 0, false);
+            battle.enemy[ei].pos.0 += 4;
+            battle.enemy[ei].pos.1 += 2;
+            battle_delay(engine, battle, 1, 0, false);
+
             engine.play_sound(battle.enemy[ei].e.magic_sound as i32);
+
+            for i in 0..battle.enemy[ei].e.magic_frames {
+                battle.enemy[ei].current_frame = battle.enemy[ei].e.idle_frames + i;
+                let wait = battle.enemy[ei].e.act_wait_frames;
+                battle_delay(engine, battle, wait, 0, false);
+            }
+            if battle.enemy[ei].e.magic_frames == 0 {
+                battle_delay(engine, battle, 1, 0, false);
+            }
+            if engine.globals.game.magics[magic_number].fire_delay == 0 {
+                for i in 0..=battle.enemy[ei].e.attack_frames as i32 {
+                    let frame = i - 1
+                        + battle.enemy[ei].e.idle_frames as i32
+                        + battle.enemy[ei].e.magic_frames as i32;
+                    battle.enemy[ei].current_frame = frame.max(0) as u16;
+                    let wait = battle.enemy[ei].e.act_wait_frames;
+                    battle_delay(engine, battle, wait, 0, false);
+                }
+            }
 
             let mut auto_defend = false;
             let mut mag_auto_defend = [false; MAX_PLAYERS_IN_PARTY];
@@ -1890,8 +2088,38 @@ pub fn battle_enemy_perform_action(engine: &mut Engine, battle: &mut Battle, ene
             if !engine.globals.auto_battle {
                 battle_display_stat_change(engine, battle);
             }
+
+            // The hurt jolt: every damaged player flashes white and is
+            // knocked back with a decaying bounce.
+            for i in 0..5 {
+                if target == -1 {
+                    for x in 0..=engine.globals.max_party_member_index as usize {
+                        let w = engine.globals.party[x].player_role as usize;
+                        if battle.player[x].prev_hp == engine.globals.game.player_roles.hp[w] {
+                            continue;
+                        }
+                        battle.player[x].current_frame = 4;
+                        if i > 0 {
+                            battle.player[x].pos.0 += 8 >> i;
+                            battle.player[x].pos.1 += 4 >> i;
+                        }
+                        battle.player[x].color_shift = if i < 3 { 6 } else { 0 };
+                    }
+                } else {
+                    let t = target as usize;
+                    battle.player[t].current_frame = 4;
+                    if i > 0 {
+                        battle.player[t].pos.0 += 8 >> i;
+                        battle.player[t].pos.1 += 4 >> i;
+                    }
+                    battle.player[t].color_shift = if i < 3 { 6 } else { 0 };
+                }
+                battle_delay(engine, battle, 1, 0, false);
+            }
+
             battle.enemy[ei].current_frame = 0;
             battle.enemy[ei].pos = battle.enemy[ei].pos_original;
+            battle_delay(engine, battle, 1, 0, false);
             battle_update_fighters(engine, battle);
             battle_post_action_check(engine, battle, true);
             battle_delay(engine, battle, 8, 0, true);
@@ -1946,10 +2174,52 @@ pub fn battle_enemy_perform_action(engine: &mut Engine, battle: &mut Battle, ene
             auto_defend = false;
         }
 
+        // Wind-up gesture, then three small steps toward the party.
+        for i in 0..battle.enemy[ei].e.magic_frames {
+            battle.enemy[ei].current_frame = battle.enemy[ei].e.idle_frames + i;
+            battle_delay(engine, battle, 2, 0, false);
+        }
+        for _ in 0..(3i32 - battle.enemy[ei].e.magic_frames as i32).max(0) {
+            battle.enemy[ei].pos.0 -= 2;
+            battle.enemy[ei].pos.1 -= 1;
+            battle_delay(engine, battle, 1, 0, false);
+        }
+        engine.play_sound(battle.enemy[ei].e.action_sound as i32);
+        battle_delay(engine, battle, 1, 0, false);
+
+        // Lunge right up to the victim (or the covering player).
+        let ex = battle.player[target as usize].pos.0 - 44;
+        let ey = battle.player[target as usize].pos.1 - 16;
+
+        let mut hit_sound = battle.enemy[ei].e.call_sound as i32;
         if cover_index != -1 {
+            let cover_role = engine.globals.party[cover_index as usize].player_role as usize;
+            hit_sound = engine.globals.game.player_roles.cover_sound[cover_role] as i32;
             battle.player[cover_index as usize].current_frame = 3;
+            battle.player[cover_index as usize].pos = (
+                battle.player[target as usize].pos.0 - 24,
+                battle.player[target as usize].pos.1 - 12,
+            );
         } else if auto_defend {
             battle.player[target as usize].current_frame = 3;
+            hit_sound = engine.globals.game.player_roles.cover_sound[player_role] as i32;
+        }
+
+        if battle.enemy[ei].e.attack_frames == 0 {
+            battle.enemy[ei].current_frame = battle.enemy[ei].e.idle_frames.saturating_sub(1);
+            battle.enemy[ei].pos = (ex, ey);
+            battle_delay(engine, battle, 2, 0, false);
+        } else {
+            for i in 0..=battle.enemy[ei].e.attack_frames as i32 {
+                let frame = battle.enemy[ei].e.idle_frames as i32
+                    + battle.enemy[ei].e.magic_frames as i32
+                    + i
+                    - 1;
+                battle.enemy[ei].current_frame = frame.max(0) as u16;
+                battle.enemy[ei].pos = (ex, ey);
+                let wait = battle.enemy[ei].e.act_wait_frames;
+                battle_delay(engine, battle, wait, 0, false);
+            }
         }
 
         if !auto_defend {
@@ -1975,14 +2245,32 @@ pub fn battle_enemy_perform_action(engine: &mut Engine, battle: &mut Battle, ene
             battle.player[target as usize].color_shift = 6;
         }
 
+        engine.play_sound(hit_sound);
         battle_delay(engine, battle, 1, 0, false);
         battle.player[target as usize].color_shift = 0;
+
+        // Knock the victim (or the covering pair) back.
+        if cover_index != -1 {
+            battle.enemy[ei].pos.0 -= 10;
+            battle.enemy[ei].pos.1 -= 8;
+            battle.player[cover_index as usize].pos.0 += 4;
+            battle.player[cover_index as usize].pos.1 += 2;
+        } else {
+            battle.player[target as usize].pos.0 += 8;
+            battle.player[target as usize].pos.1 += 4;
+        }
+        battle_delay(engine, battle, 1, 0, false);
 
         if engine.globals.game.player_roles.hp[player_role] == 0 {
             engine.play_sound(engine.globals.game.player_roles.death_sound[player_role] as i32);
             wframe_bak = 2;
         } else if is_player_dying(&engine.globals, player_role) {
             wframe_bak = 1;
+        }
+
+        if cover_index == -1 {
+            battle.player[target as usize].pos.0 += 2;
+            battle.player[target as usize].pos.1 += 1;
         }
 
         battle_delay(engine, battle, 3, 0, false);

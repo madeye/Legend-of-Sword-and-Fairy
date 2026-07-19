@@ -15,6 +15,12 @@ gameplay frames are upscaled by the same FP16 neural mega-kernel as the web
 build through wgpu (Vulkan on supported Linux/Windows systems, Metal on macOS).
 Set `RUSTPAL_DISABLE_GPU_UPSCALE=1` to use nearest-neighbor scaling.
 
+#### 战斗演示 / Battle Demo
+
+一场完整的经典回合制战斗（出招菜单 → 选择目标 → 攻击特效 → 敌方反击 → 战斗结算）：
+
+![](./screenshots/battle-demo.gif)
+
 #### 运行 / Running
 
 ```shell
@@ -93,4 +99,3 @@ and follows its GPL-3.0 license.
 ![](./screenshots/scene.png)
 ![](./screenshots/dialog.png)
 ![](./screenshots/status.png)
-![](./screenshots/battle.png)
