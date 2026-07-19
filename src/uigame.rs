@@ -470,12 +470,15 @@ impl Engine {
                 }
             }
             3 => {
-                // Music toggle. XXX audio backend not wired: toggle is a stub.
-                let _ = self.switch_menu(true);
+                // Music toggle: PAL_SwitchMenu defaults to the current state,
+                // and the chosen value is fed to AUDIO_EnableMusic.
+                let enabled = self.switch_menu(self.music_enabled);
+                self.enable_music(enabled);
             }
             4 => {
-                // Sound toggle. XXX audio backend not wired: toggle is a stub.
-                let _ = self.switch_menu(true);
+                // Sound toggle: same, via AUDIO_EnableSound.
+                let enabled = self.switch_menu(self.sound_enabled);
+                self.enable_sound(enabled);
             }
             5 => {
                 self.quit_game();
@@ -595,6 +598,7 @@ impl Engine {
 
         if self.globals.max_party_member_index == 0 {
             w = 0;
+            self.globals.cur_magic_menu_player = 0;
         } else {
             // Player info boxes.
             let mut y = 45;
@@ -633,9 +637,18 @@ impl Engine {
                 0,
                 false,
             );
+            // C seeds PAL_ReadMenu with the static `w` from the previous open,
+            // so the caster cursor is remembered across separate openings, and
+            // stores the result straight back (out-of-range values clamp to 0).
             w = self
-                .read_menu_default(&menu_items, 0, MENUITEM_COLOR, None)
+                .read_menu_default(
+                    &menu_items,
+                    self.globals.cur_magic_menu_player,
+                    MENUITEM_COLOR,
+                    None,
+                )
                 .unwrap_or(MENUITEM_VALUE_CANCELLED);
+            self.globals.cur_magic_menu_player = w;
             if w == MENUITEM_VALUE_CANCELLED {
                 return;
             }
@@ -1600,5 +1613,46 @@ mod tests {
         let h = e.show_cash(999);
         assert_ne!(h, 0);
         assert!(nonzero(&e) > 0);
+    }
+
+    #[test]
+    fn read_menu_default_resumes_from_seeded_index() {
+        // The magic menu remembers its caster cursor by seeding PAL_ReadMenu with
+        // a persisted index (globals.cur_magic_menu_player). Confirm the plumbing:
+        // a nonzero default is honored rather than always starting at item 0.
+        let mut e = engine();
+        e.screen.clear(0);
+        let items: Vec<MenuItem> = (0..3)
+            .map(|i| MenuItem {
+                value: (10 + i) as u16,
+                num_word: 0,
+                enabled: true,
+                pos: (40, 40 + i * 18),
+            })
+            .collect();
+        assert_eq!(
+            e.read_menu_default(&items, 2, MENUITEM_COLOR, None),
+            Some(12)
+        );
+        // An out-of-range seed clamps to the first item (matching PAL_ReadMenu),
+        // so storing 0xFFFF back on cancel can't wedge the next opening.
+        assert_eq!(
+            e.read_menu_default(&items, 0xFFFF, MENUITEM_COLOR, None),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn audio_enable_flags_default_on_and_toggle() {
+        // AUDIO_EnableMusic / AUDIO_EnableSound: both subsystems start enabled and
+        // the system-menu toggles flip the real gating flags (previously a no-op).
+        let mut e = engine();
+        assert!(e.music_enabled && e.sound_enabled);
+        e.enable_sound(false);
+        assert!(!e.sound_enabled);
+        e.enable_music(false);
+        assert!(!e.music_enabled);
+        e.enable_music(true);
+        assert!(e.music_enabled);
     }
 }

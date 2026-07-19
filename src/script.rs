@@ -1795,6 +1795,9 @@ impl Engine {
                     }
                     crate::fight::battle_delay(self, &mut battle, 1, 0, true);
                 }
+                // Backup the current scene so the crossfade starts from the
+                // just-captured frame (C: VIDEO_BackupScreen(g_Battle.lpSceneBuf)).
+                self.screen_bak.pixels.copy_from_slice(&battle.scene_buf.pixels);
                 crate::fight::battle_update_fighters(self, &mut battle);
                 crate::battle::make_scene(self, &mut battle);
                 crate::battle::fade_scene(self, &mut battle);
@@ -2310,6 +2313,11 @@ impl Engine {
                     }
                 }
             }
+            // Backup the current scene so the summoned monster fades in from
+            // it (C: VIDEO_BackupScreen(g_Battle.lpSceneBuf)).
+            self.screen_bak
+                .pixels
+                .copy_from_slice(&battle.scene_buf.pixels);
             crate::battle::load_battle_sprites(self, battle).ok();
             crate::battle::make_scene(self, battle);
             self.play_sound(212);
@@ -2318,6 +2326,11 @@ impl Engine {
             for i in 0..=battle.max_enemy_index as usize {
                 battle.enemy[i].color_shift = 0;
             }
+            // Backup again so the color-shift fade-out starts from the current
+            // scene (C: second VIDEO_BackupScreen(g_Battle.lpSceneBuf)).
+            self.screen_bak
+                .pixels
+                .copy_from_slice(&battle.scene_buf.pixels);
             crate::battle::make_scene(self, battle);
             crate::battle::fade_scene(self, battle);
         }
@@ -2346,6 +2359,11 @@ impl Engine {
             }
             battle.enemy[event_object_id as usize].color_shift = 0;
             self.play_sound(47);
+            // Backup the current scene so the transformed sprite fades in from
+            // it (C: VIDEO_BackupScreen(g_Battle.lpSceneBuf)).
+            self.screen_bak
+                .pixels
+                .copy_from_slice(&battle.scene_buf.pixels);
             crate::battle::load_battle_sprites(self, battle).ok();
             crate::battle::make_scene(self, battle);
             crate::battle::fade_scene(self, battle);
@@ -2440,6 +2458,7 @@ impl Engine {
                     } else if self.globals.in_battle {
                         with_battle!(self, battle => {
                             crate::battle::make_scene(self, &mut battle);
+                            crate::battle::copy_scene_to_screen(self, &battle);
                         });
                         self.video_update();
                     } else {
@@ -2758,6 +2777,18 @@ mod tests {
         // C); the synthetic scripts here always terminate, but assert it.
         e.run_trigger_script(base, eid)
     }
+
+    // NOTE: The screen-backup / scene-copy parity fixes (0x0005 in-battle
+    // redraw, 0x0092 magic-cast, 0x009E enemy-summon, 0x009F enemy-transform)
+    // all run on the battle-only code paths reached through the `with_battle!`
+    // macro, which require a live `Engine::battle = Some(Battle)`. `Battle` has
+    // no public constructor (`Battle::new`/`placeholder` are private to the
+    // `battle` module and `Battle` does not derive `Default`), so a live battle
+    // cannot be assembled from this module's harness without editing battle.rs.
+    // Those fixes are therefore covered by the make_scene→copy_scene_to_screen /
+    // screen_bak.copy_from_slice(scene_buf) invariant matching the C reference
+    // (VIDEO_CopyEntireSurface / VIDEO_BackupScreen(g_Battle.lpSceneBuf)) rather
+    // than by a standalone opcode test.
 
     #[test]
     fn opcode_give_and_remove_item() {

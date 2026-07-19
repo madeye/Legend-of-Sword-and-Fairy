@@ -111,18 +111,26 @@ pub fn seed_random(seed: i32) {
     RNG_SEED.store(seed, Ordering::Relaxed);
 }
 
+/// One iteration of util.c's LCG (glSeed = 1664525*glSeed + 1013904223),
+/// with C's silent 32-bit wraparound.
+fn lcg_step(seed: i32) -> i32 {
+    seed.wrapping_mul(1664525).wrapping_add(1013904223)
+}
+
 fn lrand() -> i32 {
     let mut seed = RNG_SEED.load(Ordering::Relaxed);
     if seed == 0 {
-        seed = web_time::SystemTime::now()
+        // Cold start: C's lrand() calls lsrand(time(NULL)) — which itself does
+        // one LCG step — and then falls through to lrand()'s own LCG step. So
+        // the first draw advances the generator TWICE from the wall-clock seed,
+        // not once.
+        let time = web_time::SystemTime::now()
             .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i32)
             .unwrap_or(1);
-        if seed == 0 {
-            seed = 1;
-        }
+        seed = lcg_step(time);
     }
-    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+    seed = lcg_step(seed);
     RNG_SEED.store(seed, Ordering::Relaxed);
     (seed >> 1).wrapping_add(1073741824)
 }
@@ -987,6 +995,8 @@ pub struct Globals {
     pub cur_main_menu_item: i32,
     pub cur_system_menu_item: i32,
     pub cur_inv_menu_item: i32,
+    /// Remembered caster cursor for PAL_InGameMagicMenu (C's `static WORD w`).
+    pub cur_magic_menu_player: u16,
     pub cur_playing_rng: i32,
     pub current_save_slot: u8,
     pub in_main_game: bool,
@@ -1054,6 +1064,7 @@ impl Globals {
             cur_main_menu_item: 0,
             cur_system_menu_item: 0,
             cur_inv_menu_item: 0,
+            cur_magic_menu_player: 0,
             cur_playing_rng: 0,
             current_save_slot: 1,
             in_main_game: false,
@@ -1942,6 +1953,26 @@ mod tests {
 
     fn globals() -> Globals {
         Globals::init(data()).expect("init globals")
+    }
+
+    #[test]
+    fn lcg_step_matches_c_constants() {
+        // util.c: glSeed = 1664525 * glSeed + 1013904223, 32-bit wraparound.
+        assert_eq!(lcg_step(0), 1_013_904_223);
+        assert_eq!(
+            lcg_step(12345),
+            12345i32.wrapping_mul(1664525).wrapping_add(1013904223)
+        );
+        // Overflow wraps silently rather than panicking (C's unsigned math).
+        assert_eq!(
+            lcg_step(i32::MAX),
+            i32::MAX.wrapping_mul(1664525).wrapping_add(1013904223)
+        );
+        // Cold-start seeding advances the LCG twice (lsrand + lrand), so a draw
+        // from wall-clock T is derived from lcg_step(lcg_step(T)), not one step.
+        let t = 1_600_000_000;
+        let cold_seed = lcg_step(lcg_step(t));
+        assert_ne!(cold_seed, lcg_step(t));
     }
 
     #[test]

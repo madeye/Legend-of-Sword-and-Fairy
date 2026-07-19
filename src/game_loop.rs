@@ -504,6 +504,10 @@ pub struct Engine {
 
     /// Audio mixer (None when no output device / headless).
     pub audio: Option<crate::audio::Mixer>,
+    /// AUDIO_MusicEnabled / AUDIO_SoundEnabled (gAudioDevice.fMusicEnabled /
+    /// fSoundEnabled) — toggled from the in-game system menu.
+    pub music_enabled: bool,
+    pub sound_enabled: bool,
     /// MUS.MKF (RIX songs) and VOC.MKF (sound effects).
     mus: Mkf,
     voc: Mkf,
@@ -582,6 +586,8 @@ impl Engine {
             shake_time: 0,
             shake_level: 0,
             audio,
+            music_enabled: true,
+            sound_enabled: true,
             mus,
             voc,
             cur_music: 0,
@@ -728,6 +734,13 @@ impl Engine {
         let Some(audio) = self.audio.as_ref() else {
             return;
         };
+        // Music disabled from the system menu: remember the intended track (in
+        // cur_music above) but stay silent until re-enabled, matching C's
+        // fMusicEnabled gate in the audio fill callback.
+        if !self.music_enabled {
+            audio.stop_music(fade_time);
+            return;
+        }
         if num <= 0 {
             audio.stop_music(fade_time);
             return;
@@ -743,6 +756,9 @@ impl Engine {
     /// AUDIO_PlaySound: play VOC sound `num`; non-positive numbers are
     /// ignored like the C code.
     pub fn play_sound(&mut self, num: i32) {
+        if !self.sound_enabled {
+            return;
+        }
         let Some(audio) = self.audio.as_ref() else {
             return;
         };
@@ -755,6 +771,24 @@ impl Engine {
         if let Some(voc) = crate::voc::decode_voc(chunk) {
             audio.play_sound(voc);
         }
+    }
+
+    /// AUDIO_EnableMusic: toggle music output. Disabling stops the current
+    /// track; re-enabling resumes the intended (last-requested) track, matching
+    /// the way the C engine re-plays gpGlobals->wNumMusic when music comes back.
+    pub fn enable_music(&mut self, enable: bool) {
+        self.music_enabled = enable;
+        if enable {
+            let num = self.cur_music;
+            self.play_music(num, true, 0.0);
+        } else if let Some(audio) = self.audio.as_ref() {
+            audio.stop_music(0.0);
+        }
+    }
+
+    /// AUDIO_EnableSound: toggle sound-effect output.
+    pub fn enable_sound(&mut self, enable: bool) {
+        self.sound_enabled = enable;
     }
 
     /// VIDEO_ShakeScreen.
@@ -1140,9 +1174,11 @@ impl Engine {
                     }
                 }
                 self.palette = pal;
-            } else {
-                self.palette = palette;
             }
+            // C's PAL_SplashScreen only recomputes the palette inside the
+            // `dwTime < 15000` branch (no else); once the fade completes it
+            // leaves the palette at the last interpolated (~99%) value rather
+            // than snapping to the exact target.
 
             if img_pos > 1 {
                 img_pos -= 1;

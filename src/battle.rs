@@ -324,7 +324,7 @@ pub struct Battle {
 }
 
 impl Battle {
-    fn new() -> Battle {
+    pub(crate) fn new() -> Battle {
         Battle {
             player: Default::default(),
             enemy: Default::default(),
@@ -468,8 +468,8 @@ pub fn blit_rle_color_shift(surf: &mut Surface, rle: &[u8], dx: i32, dy: i32, sh
 // ===========================================================================
 
 /// PAL_BattleDrawBackground: copy the background into the scene buffer,
-/// applying the background color shift.
-pub fn draw_background(battle: &mut Battle) {
+/// applying the background color shift, then the screen-wave distortion.
+pub fn draw_background(engine: &mut Engine, battle: &mut Battle) {
     let shift = battle.background_color_shift;
     for (dst, &src) in battle
         .scene_buf
@@ -485,8 +485,65 @@ pub fn draw_background(battle: &mut Battle) {
         }
         *dst = (b as u8) | (src & 0xF0);
     }
-    // PAL_ApplyWave is a purely visual screen-wave effect; skipped here (not
-    // used by the classic-mode logic and not exercised by the tests).
+
+    // PAL_ApplyWave(g_Battle.lpSceneBuf) -- battle.c:82, unconditional.  Unlike
+    // the map/ending call sites (which wave gpScreen via Engine::apply_wave),
+    // the battle waves its own scene buffer, so the effect is ported here.
+    apply_wave(engine, &mut battle.scene_buf);
+}
+
+/// PAL_ApplyWave (scene.c) applied to an arbitrary 8-bit 320x200 surface (here
+/// the battle scene buffer rather than `gpScreen`).  Each scanline is rotated
+/// left by an offset derived from `screen_wave`, using a 32-entry wave table
+/// whose starting row cycles via the persistent `index` counter.
+///
+/// The counter is the same `engine.scene.wave_index` used by
+/// [`Engine::apply_wave`], matching C where `index` is a single function-local
+/// `static` shared across every PAL_ApplyWave call site (scene, battle, ending).
+///
+/// Advances `screen_wave` by `wave_progression` each call and, once the wave
+/// has run its course (reaches 0 or >= 256), resets both to 0.
+fn apply_wave(engine: &mut Engine, scene_buf: &mut Surface) {
+    engine.globals.screen_wave = engine
+        .globals
+        .screen_wave
+        .wrapping_add(engine.globals.wave_progression as u16);
+
+    if engine.globals.screen_wave == 0 || engine.globals.screen_wave >= 256 {
+        // No need to wave the screen.
+        engine.globals.screen_wave = 0;
+        engine.globals.wave_progression = 0;
+        return;
+    }
+
+    // Calculate the waving offsets.  WARNING: assumes screen width 320.
+    let mut wave = [0i32; 32];
+    let mut a = 0i32;
+    let mut b = 60 + 8;
+    for i in 0..16usize {
+        b -= 8;
+        a += b;
+        wave[i] = a * engine.globals.screen_wave as i32 / 256;
+        wave[i + 16] = 320 - wave[i];
+    }
+
+    // Apply the effect.  WARNING: only works with a 320x200 8-bit surface.
+    let w = scene_buf.w;
+    let mut idx = engine.scene.wave_index;
+    for y in 0..scene_buf.h {
+        let shift = wave[idx];
+        if shift > 0 {
+            let shift = shift as usize;
+            let row_start = y * w;
+            let row = &mut scene_buf.pixels[row_start..row_start + w];
+            let mut buf = [0u8; SCREEN_W];
+            buf[..shift].copy_from_slice(&row[..shift]);
+            row.copy_within(shift.., 0);
+            row[w - shift..].copy_from_slice(&buf[..shift]);
+        }
+        idx = (idx + 1) % 32;
+    }
+    engine.scene.wave_index = (engine.scene.wave_index + 1) % 32;
 }
 
 // ===========================================================================
@@ -698,8 +755,8 @@ fn draw_all_sprites(engine: &Engine, battle: &mut Battle) {
 }
 
 /// PAL_BattleMakeScene.
-pub fn make_scene(engine: &Engine, battle: &mut Battle) {
-    draw_background(battle);
+pub fn make_scene(engine: &mut Engine, battle: &mut Battle) {
+    draw_background(engine, battle);
     if battle.sprite_add_lock {
         clear_sprite_object(battle);
     } else {
@@ -1177,8 +1234,14 @@ fn battle_main(engine: &mut Engine, battle: &mut Battle) -> BattleResult {
         engine.delay(200);
     }
 
+    // NOTE: matches C PAL_BattleMain (battle.c ~706-723): the pre-battle scene
+    // is backed up ONCE at the very top of this function (above), *before*
+    // make_scene()/copy_scene_to_screen() overwrite `screen` with the freshly
+    // drawn battle scene.  switch_screen(5) then wipes from that backup into the
+    // new scene.  Do NOT back up again here -- a second backup would make
+    // screen_bak == screen and the interlaced wipe-in would have no visible
+    // effect.
     if !battle.instant {
-        engine.backup_screen();
         engine.switch_screen(5);
     }
 
@@ -1587,6 +1650,133 @@ mod tests {
                 BattleResult::Won | BattleResult::Lost | BattleResult::Terminated
             ),
             "unexpected battle result: {result:?}"
+        );
+    }
+
+    /// GAP 13: draw_background must apply PAL_ApplyWave (battle.c:82) -- a
+    /// horizontal per-scanline displacement -- not merely the per-pixel
+    /// background color shift.  With `screen_wave == 0` the scene must be
+    /// unchanged (no regression); with a live wave each row must be rotated
+    /// left by the exact offset from the wave table.
+    #[test]
+    fn draw_background_applies_screen_wave() {
+        let mut e = engine();
+        e.globals.load_default_game().unwrap();
+
+        let mut battle = Box::new(Battle::new());
+        battle.instant = true;
+        battle.background_color_shift = 0; // color shift is then identity
+
+        // Distinctive per-column pattern so a horizontal shift is detectable
+        // and clearly distinct from any per-pixel color shift.  `% 251`
+        // (a prime < 256) avoids accidental period-320 alignment.
+        for y in 0..SCREEN_H {
+            for x in 0..SCREEN_W {
+                battle.background.pixels[y * SCREEN_W + x] = (x % 251) as u8;
+            }
+        }
+
+        // Baseline: no wave -> scene == unshifted background.
+        e.globals.screen_wave = 0;
+        e.globals.wave_progression = 0;
+        e.scene.wave_index = 0;
+        draw_background(&mut e, &mut battle);
+        assert_eq!(
+            battle.scene_buf.pixels, battle.background.pixels,
+            "with screen_wave==0 the scene must equal the (unshifted) background"
+        );
+
+        // Live wave: screen_wave becomes 0 + progression = 64.
+        e.globals.screen_wave = 0;
+        e.globals.wave_progression = 64;
+        e.scene.wave_index = 0;
+        draw_background(&mut e, &mut battle);
+
+        // Reconstruct the expected wave table exactly as apply_wave does.
+        let sw = 64i32;
+        let mut wave = [0i32; 32];
+        let mut a = 0i32;
+        let mut b = 60 + 8;
+        for i in 0..16usize {
+            b -= 8;
+            a += b;
+            wave[i] = a * sw / 256;
+            wave[i + 16] = 320 - wave[i];
+        }
+
+        // Each row y is a left-rotation of the pattern by wave[(y) % 32].
+        let mut shifted_any = false;
+        let mut idx = 0usize;
+        for y in 0..SCREEN_H {
+            let shift = wave[idx] as usize;
+            for x in 0..SCREEN_W {
+                let expected = (((x + shift) % SCREEN_W) % 251) as u8;
+                assert_eq!(
+                    battle.scene_buf.pixels[y * SCREEN_W + x],
+                    expected,
+                    "row {y}, col {x}: expected left-rotate by {shift}"
+                );
+            }
+            if shift > 0 && !shift.is_multiple_of(SCREEN_W) {
+                shifted_any = true;
+            }
+            idx = (idx + 1) % 32;
+        }
+        assert!(
+            shifted_any,
+            "wave produced no visible horizontal displacement"
+        );
+        assert_ne!(
+            battle.scene_buf.pixels, battle.background.pixels,
+            "a live wave must displace the scene away from the flat background"
+        );
+
+        // apply_wave advances the shared wave_index by one and, since the wave
+        // did not reach 0/>=256, leaves screen_wave running.
+        assert_eq!(e.scene.wave_index, 1);
+        assert_eq!(e.globals.screen_wave, 64);
+    }
+
+    /// GAP 12: battle_main backs up the pre-battle screen exactly once (at the
+    /// top), *before* make_scene()/copy_scene_to_screen() overwrite the screen
+    /// with the battle scene.  There must be no second backup before
+    /// switch_screen(5), otherwise screen_bak == screen and the wipe-in
+    /// transition would be invisible.  Reproduce that prefix and assert the
+    /// backup still differs from the freshly drawn scene.
+    #[test]
+    fn battle_main_keeps_prebattle_backup_distinct_for_wipe() {
+        let mut e = engine();
+        e.globals.load_default_game().unwrap();
+
+        // A distinctive pre-battle scene on the live screen.
+        for (i, p) in e.screen.pixels.iter_mut().enumerate() {
+            *p = (i % 255) as u8;
+        }
+
+        // --- mirror the top of battle_main ---
+        e.backup_screen(); // the ONE backup of the pre-battle scene
+
+        let mut battle = Box::new(Battle::new());
+        battle.instant = true;
+        // A battle background that differs from the pre-battle screen.
+        battle.background.pixels.fill(7);
+        make_scene(&mut e, &mut battle);
+        copy_scene_to_screen(&mut e, &battle);
+        // GAP 12: NO second backup_screen() here.
+
+        assert_ne!(
+            e.screen_bak.pixels, e.screen.pixels,
+            "pre-battle backup must differ from the drawn battle scene so \
+             switch_screen(5)'s interlaced wipe is visible"
+        );
+        // The backup is the pre-battle pattern; the screen is the new scene.
+        assert_eq!(
+            e.screen_bak.pixels[1], 1,
+            "backup holds the pre-battle scene"
+        );
+        assert!(
+            e.screen.pixels.iter().all(|&p| p == 7),
+            "screen holds the freshly drawn battle scene"
         );
     }
 }

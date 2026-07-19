@@ -313,6 +313,10 @@ fn battle_post_action_check(engine: &mut Engine, battle: &mut Battle, check_play
     if check_players && !engine.globals.auto_battle {
         let max_party = engine.globals.max_party_member_index as usize;
 
+        // Matches the C `goto end;` after the friend-death-cover script runs:
+        // at most ONE of the two trigger-script loops may fire per call.
+        let mut friend_death_fired = false;
+
         // Friend-death cover scripts.
         'friend: for i in 0..=max_party {
             let mut w = engine.globals.party[i].player_role as usize;
@@ -345,14 +349,20 @@ fn battle_post_action_check(engine: &mut Engine, battle: &mut Battle, check_play
                         engine.globals.game.objects[name].set_player_script_on_friend_death(ns);
                         battle.battle_result = BattleResult::OnGoing;
                         engine.input.clear_key_state();
+                        // C does `goto end;` here, skipping the dying-script loop.
+                        friend_death_fired = true;
                         break 'friend;
                     }
                 }
             }
         }
 
-        // Dying scripts.
+        // Dying scripts. Skipped entirely when the friend-death branch fired
+        // above (the C `goto end;` jumps past this loop).
         'dying: for i in 0..=max_party {
+            if friend_death_fired {
+                break 'dying;
+            }
             let w = engine.globals.party[i].player_role as usize;
             if engine.globals.player_status[w][STATUS_SLEEP] != 0
                 || engine.globals.player_status[w][STATUS_CONFUSED] != 0
@@ -1543,6 +1553,32 @@ pub fn battle_player_perform_action(engine: &mut Engine, battle: &mut Battle, pl
                             break;
                         }
                     }
+
+                    // Strike animation (rendering only; the damage math below
+                    // runs regardless of instant mode).
+                    if !battle.instant {
+                        // Two 'stumble' frame toggles before charging in.
+                        for _ in 0..2 {
+                            battle.player[pi].current_frame = 8;
+                            battle_delay(engine, battle, 1, 0, true);
+                            battle.player[pi].current_frame = 0;
+                            battle_delay(engine, battle, 1, 0, true);
+                        }
+                        battle_delay(engine, battle, 2, 0, true);
+
+                        // Walk up to the target and raise the weapon.
+                        let x = battle.player[st].pos.0 + 30;
+                        let y = battle.player[st].pos.1 + 12;
+                        battle.player[pi].pos = (x, y);
+                        battle.player[pi].current_frame = 8;
+                        battle_delay(engine, battle, 5, 0, true);
+
+                        // Strike frame + weapon sound before the hit lands.
+                        battle.player[pi].current_frame = 9;
+                        engine
+                            .play_sound(engine.globals.game.player_roles.weapon_sound[role] as i32);
+                    }
+
                     let str_ = engine.globals.player_attack_strength(role);
                     let mut def = engine
                         .globals
@@ -1562,7 +1598,21 @@ pub fn battle_player_perform_action(engine: &mut Engine, battle: &mut Battle, pl
                         damage = engine.globals.game.player_roles.hp[target_role] as i16;
                     }
                     engine.globals.game.player_roles.hp[target_role] -= damage as u16;
+
+                    // Knock the victim back and flash them white as the damage
+                    // number pops.
+                    if !battle.instant {
+                        battle.player[st].pos.0 -= 12;
+                        battle.player[st].pos.1 -= 6;
+                        battle_delay(engine, battle, 1, 0, true);
+                        battle.player[st].color_shift = 6;
+                        battle_delay(engine, battle, 1, 0, true);
+                    }
                     battle_display_stat_change(engine, battle);
+                    if !battle.instant {
+                        battle.player[st].color_shift = 0;
+                        battle_delay(engine, battle, 4, 0, true);
+                    }
                     battle_update_fighters(engine, battle);
                     battle_delay(engine, battle, 4, 0, true);
                 }
@@ -1905,6 +1955,44 @@ pub fn battle_enemy_perform_action(engine: &mut Engine, battle: &mut Battle, ene
     } else if battle.enemy[ei].status[STATUS_CONFUSED] > 0 {
         let itarget = enemy_select_enemy_target_index(battle);
         if itarget != ei {
+            // Charge/effect animation (rendering only; the damage math below
+            // runs regardless of instant mode).
+            if !battle.instant {
+                // Walk ~3/4 of the way toward the victim by averaging the two
+                // positions each of three frames.
+                let ix = battle.enemy[itarget].pos.0;
+                let iy = battle.enemy[itarget].pos.1;
+                for _ in 0..3 {
+                    let x = (battle.enemy[ei].pos.0 + ix) / 2;
+                    let y = (battle.enemy[ei].pos.1 + iy) / 2;
+                    battle.enemy[ei].pos = (x, y);
+                    battle_delay(engine, battle, 1, 0, true);
+                }
+
+                // Three-frame weapon-effect sprite (indices 9..12) blitted over
+                // the victim's head.
+                let ex = (battle.enemy[ei].pos.0 + battle.enemy[itarget].pos.0) / 2;
+                let victim_h = crate::surface::sprite_frame(&battle.enemy[itarget].sprite, 0)
+                    .map(|f| crate::surface::rle_height(f) as i32)
+                    .unwrap_or(0);
+                let ey = battle.enemy[itarget].pos.1 - victim_h / 3 + 10;
+                let mut time = engine.ticks() + BATTLE_FRAME_TIME;
+                for frame_idx in 9usize..12 {
+                    engine.delay_until(time);
+                    time = engine.ticks() + BATTLE_FRAME_TIME;
+                    make_scene(engine, battle);
+                    copy_scene_to_screen(engine, battle);
+                    if let Some(b) = crate::surface::sprite_frame(&battle.effect_sprite, frame_idx)
+                    {
+                        let bw = crate::surface::rle_width(b) as i32;
+                        let bh = crate::surface::rle_height(b) as i32;
+                        engine.screen.blit_rle(b, ex - bw / 2, ey - bh);
+                    }
+                    crate::uibattle::ui_update(engine, battle);
+                    engine.video_update();
+                }
+            }
+
             let mut str_ = battle.enemy[ei].e.attack_strength as i16 as i32;
             str_ += (battle.enemy[ei].e.level as i32 + 6) * 6;
             let mut def = battle.enemy[itarget].e.defense as i16 as i32;
@@ -1922,6 +2010,9 @@ pub fn battle_enemy_perform_action(engine: &mut Engine, battle: &mut Battle, ene
             battle_display_stat_change(engine, battle);
             show_post_magic_anim(engine, battle);
             battle_delay(engine, battle, 5, 0, true);
+            // Return the attacker to its home position (C restores posOriginal).
+            battle.enemy[ei].pos = battle.enemy[ei].pos_original;
+            battle_delay(engine, battle, 2, 0, true);
             battle_post_action_check(engine, battle, false);
         }
     } else if magic != 0
@@ -2313,7 +2404,33 @@ pub fn battle_steal_from_enemy(
     let ti = target as usize;
 
     battle.player[player_index].current_frame = 10;
-    battle_delay(engine, battle, 1, 0, true);
+
+    // Walk up to the enemy, flash it white on the last approach step, then
+    // back off a pixel (rendering only; the steal check below runs regardless).
+    if !battle.instant {
+        let offset = (ti as i32 - player_index as i32) * 8;
+        let mut x = battle.enemy[ti].pos.0 + 64 - offset;
+        let mut y = battle.enemy[ti].pos.1 + 22 + offset;
+        battle.player[player_index].pos = (x, y);
+        battle_delay(engine, battle, 1, 0, true);
+
+        for i in 0..5 {
+            x -= i + 8;
+            y -= 4;
+            battle.player[player_index].pos = (x, y);
+            if i == 4 {
+                battle.enemy[ti].color_shift = 6;
+            }
+            battle_delay(engine, battle, 1, 0, true);
+        }
+
+        battle.enemy[ti].color_shift = 0;
+        x -= 1;
+        battle.player[player_index].pos = (x, y);
+        battle_delay(engine, battle, 3, 0, true);
+    } else {
+        battle_delay(engine, battle, 1, 0, true);
+    }
 
     battle.player[player_index].state = FighterState::Wait;
     battle.player[player_index].time_meter = 0.0;
@@ -2417,6 +2534,17 @@ pub fn battle_simulate_magic(
 mod tests {
     use super::*;
     use crate::battle::ActionQueue;
+
+    // NOTE: The C-parity fixes in `battle_post_action_check` (goto-end skip),
+    // the `AttackMate` arm, `battle_steal_from_enemy`, and the confused-enemy
+    // arm of `battle_enemy_perform_action` all operate on a live `Battle`
+    // value. `Battle::new()` is private to the `battle` module, so this test
+    // module (which can only reach pure functions) cannot construct a
+    // `Battle`/`Engine` pair to drive them end-to-end. The integration-style
+    // harness that builds a headless `Engine` + `Battle` lives in
+    // `battle.rs`'s own test module (see `auto_battle_terminates`); a
+    // control-flow test for the goto-end skip, or a frame/sound-sequence test
+    // for the animation arms, belongs there rather than here.
 
     fn globals() -> Globals {
         std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));

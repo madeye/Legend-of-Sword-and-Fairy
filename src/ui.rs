@@ -282,8 +282,17 @@ impl Engine {
                 b'\\' => {
                     i += 1;
                     if i < text.len() {
-                        out.push(text[i]);
-                        i += 1;
+                        // C's PAL_UnescapeText copies exactly one whole wchar_t
+                        // after the backslash, so a full-width (Big5 double-byte)
+                        // escaped character must be copied as both of its bytes.
+                        if byte_is_lead(text[i]) && i + 1 < text.len() {
+                            out.push(text[i]);
+                            out.push(text[i + 1]);
+                            i += 2;
+                        } else {
+                            out.push(text[i]);
+                            i += 1;
+                        }
                     }
                 }
                 _ => {
@@ -977,7 +986,10 @@ impl Engine {
                         } else {
                             let ch = [b2];
                             i += 1;
-                            self.draw_dialog_char(&ch, &mut x, y, is_dialog, false);
+                            // C's `case '\\':` falls through into `default:`, so an
+                            // escaped ASCII digit in dialog text still takes the
+                            // number-sprite path (maybe_number: true).
+                            self.draw_dialog_char(&ch, &mut x, y, is_dialog, true);
                         }
                         if !is_dialog && !self.ui.user_skip {
                             self.per_char_delay();
@@ -1237,6 +1249,18 @@ mod tests {
 
     fn nonzero_pixels(e: &Engine) -> usize {
         e.screen.pixels.iter().filter(|&&p| p != 0).count()
+    }
+
+    #[test]
+    fn unescape_text_keeps_big5_char_after_backslash() {
+        // Backslash + a Big5 double-byte char (lead 0xAA, trail 0xAC): C copies
+        // the whole wchar_t, so BOTH bytes must survive — dropping the trail
+        // byte would desync every following lead/trail pair.
+        assert_eq!(Engine::unescape_text(b"\\\xaa\xac"), vec![0xaa, 0xac]);
+        // Backslash + a single ASCII byte still copies exactly that one byte.
+        assert_eq!(Engine::unescape_text(b"\\A"), b"A".to_vec());
+        // A bare (unescaped) Big5 char is preserved as well.
+        assert_eq!(Engine::unescape_text(b"\xaa\xac"), vec![0xaa, 0xac]);
     }
 
     #[test]
