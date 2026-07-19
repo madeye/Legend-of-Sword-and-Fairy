@@ -24,6 +24,7 @@ use crate::input::{
     KEY_SEARCH, KEY_STATUS, KEY_THROW_ITEM, KEY_UP, KEY_USE_ITEM,
 };
 use crate::surface;
+use crate::ui::{MenuItem, MENUITEM_COLOR, MENUITEM_COLOR_CONFIRMED};
 
 // uibattle.c file statics.
 static S_FRAME: AtomicU32 = AtomicU32::new(0);
@@ -49,8 +50,14 @@ const SPRITENUM_BATTLE_ARROW_SELECTEDPLAYER: usize = 67;
 const SPRITENUM_BATTLE_ARROW_CURRENTPLAYER_RED: usize = 68;
 const SPRITENUM_BATTLE_ARROW_CURRENTPLAYER: usize = 69;
 
-/// BATTLEUI_LABEL_AUTO ("auto attack" word).
+/// BATTLEUI labels (uibattle.h): word ids of the misc-menu / sub-menu items.
+const BATTLEUI_LABEL_USEITEM: u16 = 23;
+const BATTLEUI_LABEL_THROWITEM: u16 = 24;
 const BATTLEUI_LABEL_AUTO: u16 = 56;
+const BATTLEUI_LABEL_INVENTORY: u16 = 57;
+const BATTLEUI_LABEL_DEFEND: u16 = 58;
+const BATTLEUI_LABEL_FLEE: u16 = 59;
+const BATTLEUI_LABEL_STATUS: u16 = 60;
 
 /// The four battle menu icons: (sprite, position, action id).
 const BATTLE_MENU_ICONS: [(usize, (i32, i32), u8); 4] = [
@@ -615,8 +622,33 @@ fn ui_select_move(engine: &mut Engine, battle: &mut Battle) {
                 if battle.ui.cur_player_index > 0 {
                     loop {
                         battle.ui.cur_player_index -= 1;
-                        battle.player[battle.ui.cur_player_index as usize].state =
-                            crate::battle::FighterState::Wait;
+                        let cur = battle.ui.cur_player_index as usize;
+                        battle.player[cur].state = crate::battle::FighterState::Wait;
+
+                        // Release the inventory reservation that
+                        // battle_commit_action (mark_item_in_use) placed when
+                        // this player committed a throw/consume-item action
+                        // (uibattle.c ~1239-1264): throw always releases; use
+                        // releases only for ITEMFLAG_CONSUMING items.
+                        let action = battle.player[cur].action;
+                        let release = match action.action_type {
+                            BattleActionType::ThrowItem => true,
+                            BattleActionType::UseItem => {
+                                engine.globals.game.objects[action.action_id as usize].item_flags()
+                                    & crate::global::ITEMFLAG_CONSUMING
+                                    != 0
+                            }
+                            _ => false,
+                        };
+                        if release {
+                            for inv in 0..crate::global::MAX_INVENTORY {
+                                if engine.globals.inventory[inv].item == action.action_id {
+                                    engine.globals.inventory[inv].amount_in_use -= 1;
+                                    break;
+                                }
+                            }
+                        }
+
                         let r = engine.globals.party[battle.ui.cur_player_index as usize]
                             .player_role as usize;
                         if battle.ui.cur_player_index == 0
@@ -795,10 +827,14 @@ fn ui_select_target_enemy(engine: &mut Engine, battle: &mut Battle, s_frame: u32
 
 /// kBattleUISelectTargetPlayer handling (classic).
 fn ui_select_target_player(engine: &mut Engine, battle: &mut Battle, s_frame: u32) {
+    // Classic: don't bother selecting when only 1 player is in the party.
+    // Like C (uibattle.c ~1546-1555, no `break` in the `#ifdef PAL_CLASSIC`
+    // block), there is NO early-out here — after committing, control falls
+    // through to the icon-graying draw, the arrow draw, and the same-frame
+    // KEY_MENU/SEARCH/LEFT/RIGHT handling below.
     if engine.globals.max_party_member_index == 0 {
         battle.ui.selected_index = 0;
         battle_commit_action(engine, battle, false);
-        return;
     }
     let max_party = engine.globals.max_party_member_index as i32;
 
@@ -882,10 +918,68 @@ fn ui_throw_item(engine: &mut Engine, battle: &mut Battle) {
     }
 }
 
-/// PAL_BattleUIMiscMenuUpdate (classic key handling).
+/// PAL_BattleUIDrawMiscMenu (classic): the box + the 5 misc-menu labels, with
+/// the current selection highlighted (shimmering when selected, confirmed color
+/// when confirmed).
+fn draw_misc_menu(engine: &mut Engine, current_item: i32, confirmed: bool) {
+    let items = [
+        MenuItem {
+            value: 0,
+            num_word: BATTLEUI_LABEL_AUTO,
+            enabled: true,
+            pos: (16, 32),
+        },
+        MenuItem {
+            value: 1,
+            num_word: BATTLEUI_LABEL_INVENTORY,
+            enabled: true,
+            pos: (16, 50),
+        },
+        MenuItem {
+            value: 2,
+            num_word: BATTLEUI_LABEL_DEFEND,
+            enabled: true,
+            pos: (16, 68),
+        },
+        MenuItem {
+            value: 3,
+            num_word: BATTLEUI_LABEL_FLEE,
+            enabled: true,
+            pos: (16, 86),
+        },
+        MenuItem {
+            value: 4,
+            num_word: BATTLEUI_LABEL_STATUS,
+            enabled: true,
+            pos: (16, 104),
+        },
+    ];
+
+    let columns = engine.menu_text_max_width(&items) - 1;
+    engine.create_box((2, 20), 4, columns, 0, false);
+
+    for (i, it) in items.iter().enumerate() {
+        let color = if i as i32 == current_item {
+            if confirmed {
+                MENUITEM_COLOR_CONFIRMED
+            } else {
+                engine.menuitem_color_selected()
+            }
+        } else {
+            MENUITEM_COLOR
+        };
+        let word = engine.texts.word(it.num_word as usize);
+        engine.draw_text(&word, it.pos, color, true, false);
+    }
+}
+
+/// PAL_BattleUIMiscMenuUpdate (classic).
 fn ui_misc_menu_update(engine: &mut Engine) -> u16 {
     let mut cur = CUR_MISC_MENU_ITEM.load(Ordering::Relaxed);
-    // (Menu drawing is cross-module; the key handling is faithful.)
+
+    // Draw the menu (box + highlighted labels) every frame it is open.
+    draw_misc_menu(engine, cur, false);
+
     if engine.input.pressed(KEY_UP | KEY_LEFT) {
         cur -= 1;
         if cur < 0 {
@@ -910,6 +1004,36 @@ fn ui_misc_menu_update(engine: &mut Engine) -> u16 {
 /// PAL_BattleUIMiscItemSubMenuUpdate.
 fn ui_misc_item_sub_menu_update(engine: &mut Engine) -> u16 {
     let mut cur = CUR_SUB_MENU_ITEM.load(Ordering::Relaxed);
+
+    // Classic: redraw the misc menu with INVENTORY highlighted+confirmed, then
+    // draw the Use/Throw sub-menu box + labels (uibattle.c ~502-522).
+    draw_misc_menu(engine, 1, true);
+    let items = [
+        MenuItem {
+            value: 0,
+            num_word: BATTLEUI_LABEL_USEITEM,
+            enabled: true,
+            pos: (44, 62),
+        },
+        MenuItem {
+            value: 1,
+            num_word: BATTLEUI_LABEL_THROWITEM,
+            enabled: true,
+            pos: (44, 80),
+        },
+    ];
+    let columns = engine.menu_text_max_width(&items) - 1;
+    engine.create_box((30, 50), 1, columns, 0, false);
+    for (i, it) in items.iter().enumerate() {
+        let color = if i as i32 == cur {
+            engine.menuitem_color_selected()
+        } else {
+            MENUITEM_COLOR
+        };
+        let word = engine.texts.word(it.num_word as usize);
+        engine.draw_text(&word, it.pos, color, true, false);
+    }
+
     if engine.input.pressed(KEY_UP | KEY_LEFT) {
         cur = 0;
     } else if engine.input.pressed(KEY_DOWN | KEY_RIGHT) {
@@ -1003,10 +1127,126 @@ fn item_select_menu_update(engine: &mut Engine, battle: &mut Battle) -> u16 {
 mod tests {
     use super::*;
 
+    fn engine() -> Engine {
+        std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
+        Engine::new(true).expect("headless engine")
+    }
+
     #[test]
     fn frame_counter_advances() {
         let a = S_FRAME.load(Ordering::Relaxed);
         S_FRAME.fetch_add(1, Ordering::Relaxed);
         assert!(S_FRAME.load(Ordering::Relaxed) > a);
+    }
+
+    /// GAP 9: cancelling back through a committed throw-item action must
+    /// release the inventory reservation that the commit placed
+    /// (uibattle.c ~1239-1264).
+    #[test]
+    fn cancel_releases_thrown_item_reservation() {
+        let mut e = engine();
+        e.globals.load_default_game().unwrap();
+        e.globals.max_party_member_index = 1;
+        e.globals.party[0].player_role = 0;
+        e.globals.party[1].player_role = 1;
+        e.globals.game.player_roles.hp[0] = 100;
+        e.globals.game.player_roles.hp[1] = 100;
+
+        // Player 0 committed "throw item X" (amount 1, one reserved).
+        let item = 1u16;
+        e.globals.inventory[0].item = item;
+        e.globals.inventory[0].amount = 1;
+        e.globals.inventory[0].amount_in_use = 1;
+
+        let mut battle = Box::new(Battle::new());
+        battle.ui.state = BattleUiState::SelectMove;
+        battle.ui.menu_state = BattleMenuState::Main;
+        battle.ui.cur_player_index = 1;
+        battle.player[0].action.action_type = BattleActionType::ThrowItem;
+        battle.player[0].action.action_id = item;
+
+        // Player 1 presses KEY_MENU to cancel back to player 0.
+        e.input.key_press = KEY_MENU;
+        ui_select_move(&mut e, &mut battle);
+
+        assert_eq!(battle.ui.cur_player_index, 0);
+        assert_eq!(
+            e.globals.inventory[0].amount_in_use, 0,
+            "throw-item reservation must be released when cancelling back"
+        );
+    }
+
+    /// GAP 9: a UseItem action without ITEMFLAG_CONSUMING must NOT be
+    /// released on cancel (only consuming items are reserved / released).
+    #[test]
+    fn cancel_keeps_reservation_for_nonconsuming_use_item() {
+        let mut e = engine();
+        e.globals.load_default_game().unwrap();
+        e.globals.max_party_member_index = 1;
+        e.globals.party[0].player_role = 0;
+        e.globals.party[1].player_role = 1;
+        e.globals.game.player_roles.hp[0] = 100;
+        e.globals.game.player_roles.hp[1] = 100;
+
+        // A UseItem action on an item that is not consuming (clear the
+        // ITEMFLAG_CONSUMING bit in the object's flags word, data[6]).
+        let item = 1u16;
+        e.globals.game.objects[item as usize].data[6] &= !crate::global::ITEMFLAG_CONSUMING;
+        e.globals.inventory[0].item = item;
+        e.globals.inventory[0].amount = 1;
+        e.globals.inventory[0].amount_in_use = 1;
+
+        let mut battle = Box::new(Battle::new());
+        battle.ui.state = BattleUiState::SelectMove;
+        battle.ui.menu_state = BattleMenuState::Main;
+        battle.ui.cur_player_index = 1;
+        battle.player[0].action.action_type = BattleActionType::UseItem;
+        battle.player[0].action.action_id = item;
+
+        e.input.key_press = KEY_MENU;
+        ui_select_move(&mut e, &mut battle);
+
+        assert_eq!(
+            e.globals.inventory[0].amount_in_use, 1,
+            "non-consuming use-item reservation must be left untouched"
+        );
+    }
+
+    /// GAP 18: with a single party member, SelectTargetPlayer commits and
+    /// then falls through to the draw + key handling (no early return), so
+    /// the target resets to 0 and the action is committed without panic.
+    #[test]
+    fn select_target_player_single_member_commits_and_falls_through() {
+        let mut e = engine();
+        e.globals.load_default_game().unwrap();
+        e.globals.max_party_member_index = 0;
+        e.globals.party[0].player_role = 0;
+
+        let mut battle = Box::new(Battle::new());
+        battle.ui.state = BattleUiState::SelectTargetPlayer;
+        battle.ui.cur_player_index = 0;
+        battle.ui.selected_index = 5;
+        battle.ui.action_type = BattleActionType::Defend;
+
+        ui_select_target_player(&mut e, &mut battle, 1);
+
+        assert_eq!(battle.ui.selected_index, 0, "commit resets the target to 0");
+        assert_eq!(
+            battle.ui.state,
+            BattleUiState::Wait,
+            "the action was committed"
+        );
+        assert_eq!(battle.player[0].state, crate::battle::FighterState::Act);
+    }
+
+    /// GAP 10: the misc menu and its item sub-menu draw routines run every
+    /// frame the menu is open; exercise them (box + labels) and confirm the
+    /// no-key path returns the "not confirmed" sentinel without panicking.
+    #[test]
+    fn misc_menu_draw_does_not_panic() {
+        let mut e = engine();
+        e.globals.load_default_game().unwrap();
+        assert_eq!(ui_misc_menu_update(&mut e), 0xFFFF);
+        assert_eq!(ui_misc_item_sub_menu_update(&mut e), 0xFFFF);
     }
 }

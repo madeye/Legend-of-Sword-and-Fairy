@@ -256,15 +256,16 @@ impl Engine {
             self.video_update();
             self.input.clear_key_state();
 
-            if w != 0xFFFF {
-                return w;
-            }
-
-            // Headless: don't spin waiting for input.
+            // Headless: don't spin waiting for input. This port-only short-circuit
+            // must stay ahead of the wait loop below or headless tests would hang;
+            // it still honors a real selection made this frame.
             if self.ui.auto_confirm {
-                return 0;
+                return if w != 0xFFFF { w } else { 0 };
             }
 
+            // C runs one more ProcessEvent + the FRAME_TIME wait loop (breaking
+            // early on a new keypress) BEFORE acting on `w`, so even the
+            // confirming frame holds its highlight for ~one frame.
             self.process_event();
             while self.ticks() < dw_time {
                 self.process_event();
@@ -277,6 +278,10 @@ impl Engine {
                 return 0;
             }
             dw_time = self.ticks() + FRAME_TIME;
+
+            if w != 0xFFFF {
+                return w;
+            }
 
             if prev_index != self.globals.cur_inv_menu_item {
                 let cur = self.globals.cur_inv_menu_item;

@@ -75,7 +75,10 @@ impl Engine {
                     let vy = self.globals.viewport.1;
                     if ex < vx || ex > vx + 320 || ey < vy || ey > vy + 320 {
                         let p = &mut self.globals.game.event_objects[idx];
-                        p.state = p.state.abs();
+                        // C's abs() promotes to int, so abs(SHRT_MIN) truncates
+                        // silently back to SHRT_MIN; wrapping_abs mirrors that and
+                        // avoids a debug-build overflow panic on i16::MIN.
+                        p.state = p.state.wrapping_abs();
                         p.current_frame_num = 0;
                     }
                 } else if state > 0
@@ -487,5 +490,26 @@ mod tests {
         let mut e = engine();
         // With a small timeout and no key, this returns promptly.
         e.wait_for_key(10);
+    }
+
+    #[test]
+    fn game_update_auto_state_survives_i16_min() {
+        let mut e = engine();
+        e.globals.entering_scene = false;
+        let scene = e.globals.num_scene as usize;
+        let start = e.globals.game.scenes[scene - 1].event_object_index + 1;
+        let end = e.globals.game.scenes[scene].event_object_index;
+        assert!(start <= end, "scene 1 should have event objects");
+        let idx = (start - 1) as usize;
+        // Off-screen event object with the pathological state value: the
+        // auto-hide branch runs `state = state.wrapping_abs()`, which panicked
+        // in debug builds before the fix (i16::MIN.abs() overflows).
+        e.globals.game.event_objects[idx].state = i16::MIN;
+        e.globals.game.event_objects[idx].vanish_time = 0;
+        e.globals.game.event_objects[idx].x = 30000;
+        e.globals.game.event_objects[idx].y = 30000;
+        e.game_update(true); // must not panic
+                             // wrapping_abs(i16::MIN) == i16::MIN, matching C's abs()+truncation.
+        assert_eq!(e.globals.game.event_objects[idx].state, i16::MIN);
     }
 }

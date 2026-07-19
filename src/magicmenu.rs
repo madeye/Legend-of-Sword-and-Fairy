@@ -216,7 +216,12 @@ impl Engine {
             }
         }
 
-        if self.input.pressed(KEY_SEARCH) && ctx.items[ctx.current].enabled {
+        // C's rgMagicItem is a fixed 32-slot array, so rgMagicItem[current] is
+        // always an in-bounds (if possibly stale) read even when the role has
+        // zero usable magics. Our items Vec can be empty, so guard the index —
+        // KEY_MENU (handled above) still lets the player cancel out.
+        if self.input.pressed(KEY_SEARCH) && ctx.items.get(ctx.current).is_some_and(|it| it.enabled)
+        {
             let col = ctx.current as i32 % items_per_line;
             let line = if (ctx.current as i32) < items_per_line * page_line_offset {
                 ctx.current as i32 / items_per_line
@@ -335,5 +340,20 @@ mod tests {
         let r = e.magic_selection_menu_update(&mut ctx);
         assert_eq!(r, 0xFFFF); // not confirmed (no key), but drew
         assert!(e.screen.pixels.iter().any(|&p| p != 0));
+    }
+
+    #[test]
+    fn magic_selection_update_survives_empty_items() {
+        // A role with zero usable magics yields an empty items Vec. C reads its
+        // fixed-size array safely; the Rust port must not panic-index the Vec
+        // when confirm (KEY_SEARCH) is pressed on the empty submenu.
+        let mut e = engine();
+        let mut ctx = e.magic_selection_menu_init(0, false, 0);
+        ctx.items.clear();
+        ctx.current = 0;
+        e.screen.clear(0);
+        e.input.key_press = crate::input::KEY_SEARCH;
+        let r = e.magic_selection_menu_update(&mut ctx);
+        assert_eq!(r, 0xFFFF); // no selection, and crucially: no panic.
     }
 }
