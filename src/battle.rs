@@ -842,6 +842,10 @@ fn wait_for_any_key(engine: &mut Engine, battle: &Battle, timeout_ms: u64) {
     engine.input.clear_key_state();
 }
 
+const BATTLEWIN_GETEXP_LABEL: u16 = 30;
+const BATTLEWIN_BEATENEMY_LABEL: u16 = 9;
+const BATTLEWIN_DOLLAR_LABEL: u16 = 10;
+
 /// PAL_BattleWon: show the "you win" message and add experience for players.
 /// The interactive boxes/level-up display are skipped in instant mode; all
 /// stat/EXP mutations run identically.
@@ -853,14 +857,22 @@ fn battle_won(engine: &mut Engine, battle: &mut Battle) {
     if battle.exp_gained > 0 {
         engine.play_music(if battle.is_boss { 2 } else { 3 }, false, 0.0);
         if !battle.instant {
-            // Interactive summary box (best-effort; number drawing goes through
-            // the ui.rs contract stubs).
-            engine.create_single_line_box((83, 60), 6, false);
+            // Summary boxes with the "got experience" / "beat enemy" /
+            // "dollar" labels, laid out exactly like PAL_BattleWon.
+            let w1 = engine.word_width(BATTLEWIN_GETEXP_LABEL) + 3;
+            let ww1 = (w1 - 8) << 3;
+            engine.create_single_line_box((83 - ww1, 60), w1, false);
             engine.create_single_line_box((65, 105), 10, false);
+            let getexp = engine.texts.word(BATTLEWIN_GETEXP_LABEL as usize);
+            let beatenemy = engine.texts.word(BATTLEWIN_BEATENEMY_LABEL as usize);
+            let dollar = engine.texts.word(BATTLEWIN_DOLLAR_LABEL as usize);
+            engine.draw_text(&getexp, (95 - ww1, 70), 0, false, false);
+            engine.draw_text(&beatenemy, (77, 115), 0, false, false);
+            engine.draw_text(&dollar, (197, 115), 0, false, false);
             engine.draw_number(
                 battle.exp_gained as u32,
                 5,
-                (182, 74),
+                (182 + ww1, 74),
                 crate::ui::NumColor::Yellow,
                 crate::ui::NumAlign::Right,
             );

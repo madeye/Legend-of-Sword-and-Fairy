@@ -62,15 +62,21 @@ impl Surface {
 
     /// Blit an RLE bitmap with transparency (port of PAL_RLEBlitToSurface).
     pub fn blit_rle(&mut self, rle: &[u8], x: i32, y: i32) {
-        self.blit_rle_impl(rle, x, y, false);
+        self.blit_rle_impl(rle, x, y, RleBlitMode::Normal);
     }
 
     /// Blit only a shadow (darken destination) shaped like the bitmap.
     pub fn blit_rle_shadow(&mut self, rle: &[u8], x: i32, y: i32) {
-        self.blit_rle_impl(rle, x, y, true);
+        self.blit_rle_impl(rle, x, y, RleBlitMode::Shadow);
     }
 
-    fn blit_rle_impl(&mut self, rle: &[u8], dx: i32, dy: i32, shadow: bool) {
+    /// Blit in mono-color form (port of PAL_RLEBlitMonoColor): every pixel is
+    /// drawn in `color`'s hue with its brightness nibble shifted by `shift`.
+    pub fn blit_rle_mono_color(&mut self, rle: &[u8], x: i32, y: i32, color: u8, shift: i32) {
+        self.blit_rle_impl(rle, x, y, RleBlitMode::Mono { color, shift });
+    }
+
+    fn blit_rle_impl(&mut self, rle: &[u8], dx: i32, dy: i32, mode: RleBlitMode) {
         let rle = skip_rle_header(rle);
         if rle.len() < 4 {
             return;
@@ -111,11 +117,14 @@ impl Surface {
                         && (dst_y as usize) < self.h
                     {
                         let idx = dst_y as usize * self.w + dst_x as usize;
-                        if shadow {
-                            self.pixels[idx] = calc_shadow_color(self.pixels[idx]);
-                        } else {
-                            self.pixels[idx] = rle[p + k];
-                        }
+                        self.pixels[idx] = match mode {
+                            RleBlitMode::Normal => rle[p + k],
+                            RleBlitMode::Shadow => calc_shadow_color(self.pixels[idx]),
+                            RleBlitMode::Mono { color, shift } => {
+                                let b = (rle[p + k] & 0x0F) as i32 + shift;
+                                b.clamp(0, 0x0F) as u8 | (color & 0xF0)
+                            }
+                        };
                     }
                     src_x += 1;
                     if src_x >= w {
@@ -152,6 +161,14 @@ pub fn copy_rows(src: &[u8], src_y: usize, dst: &mut Surface, dst_y: usize, rows
             dst.pixels[do_..do_ + SCREEN_W].copy_from_slice(&src[so..so + SCREEN_W]);
         }
     }
+}
+
+/// Pixel treatment for `blit_rle_impl`.
+#[derive(Clone, Copy)]
+enum RleBlitMode {
+    Normal,
+    Shadow,
+    Mono { color: u8, shift: i32 },
 }
 
 /// Darken a palette index (used for shadows). From PAL_CalcShadowColor.

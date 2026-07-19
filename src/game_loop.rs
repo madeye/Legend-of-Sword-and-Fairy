@@ -533,6 +533,19 @@ pub struct Engine {
     /// skipped.  Off in normal play; tests set it to fight real battles fast.
     pub battle_instant: bool,
 
+    /// Optional per-present capture hook (headless recording tools).  Called
+    /// on every presented frame with the 320×200 RGBA image (shake applied,
+    /// exactly what a player would see) and the tick time.  `None` in normal
+    /// play; the conversion only runs while a sink is installed.
+    #[allow(clippy::type_complexity)]
+    pub frame_sink: Option<Box<dyn FnMut(&[u8], u64)>>,
+
+    /// Demo-recording pilot: when set, the battle UI presses "confirm" by
+    /// itself at a human cadence whenever it is waiting for a command, so a
+    /// recorded battle exercises the real menu flow.  The value is the next
+    /// tick at which the pilot may press.  `None` in normal play.
+    pub demo_pilot: Option<u64>,
+
     // Per-module state (owned by the respective module files).
     pub script: crate::script::ScriptState,
     pub ui: crate::ui::UiState,
@@ -579,6 +592,8 @@ impl Engine {
             ending_effect_sprite: 0,
             battle: None,
             battle_instant: false,
+            frame_sink: None,
+            demo_pilot: None,
             script: Default::default(),
             ui: Default::default(),
             scene: Default::default(),
@@ -647,8 +662,27 @@ impl Engine {
         } else {
             None
         };
+        self.capture_frame(false, shake);
         if let Some(video) = self.video.as_mut() {
             video.present(&self.screen, &self.palette, shake);
+        }
+    }
+
+    /// Feed the frame sink (if any) with the surface about to be presented.
+    fn capture_frame(&mut self, which_bak: bool, shake: Option<(u16, u16)>) {
+        if self.frame_sink.is_none() {
+            return;
+        }
+        let now = self.ticks();
+        let surf = if which_bak {
+            &self.screen_bak
+        } else {
+            &self.screen
+        };
+        let mut rgba = vec![0u8; SCREEN_W * SCREEN_H * 4];
+        render_rgba(surf, &self.palette, shake, &mut rgba);
+        if let Some(sink) = self.frame_sink.as_mut() {
+            sink(&rgba, now);
         }
     }
 
@@ -676,6 +710,7 @@ impl Engine {
         } else {
             None
         };
+        self.capture_frame(which_bak, shake);
         if let Some(video) = self.video.as_mut() {
             let surf = if which_bak {
                 &self.screen_bak
