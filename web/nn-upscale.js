@@ -88,9 +88,10 @@ fn conv_first(@builtin(workgroup_id) wg : vec3<u32>,
   }
 }
 
+// Stride is conv_last's 8x8x4 = 256 invocations.
 fn loadTile16(wg : vec3<u32>, lidx : u32, iw : i32, ih : i32) {
   let x0 = i32(wg.x * TS) - 1; let y0 = i32(wg.y * TS) - 1;
-  for (var p = lidx; p < 100u; p += 64u) {
+  for (var p = lidx; p < 100u; p += 256u) {
     let px = x0 + i32(p % 10u);
     let py = y0 + i32(p / 10u);
     if (px >= 0 && px < iw && py >= 0 && py < ih) {
@@ -103,23 +104,29 @@ fn loadTile16(wg : vec3<u32>, lidx : u32, iw : i32, ih : i32) {
   workgroupBarrier();
 }
 
-@compute @workgroup_size(8, 8, 1)
+// Channel-split output layer: z-slice by computes out-vec4s {by, by+4, by+8}
+// — the R/G/B planes of HR row by in the pixel's 4x4 block — and stores 4 of
+// the 16 output texels. Per-vector accumulation order matches the 8x8x1
+// kernel, so output stays bit-identical (proven on the native port, where
+// this cut conv_last from 6.0ms to 1.6ms on M4).
+@compute @workgroup_size(8, 8, 4)
 fn conv_last(@builtin(workgroup_id) wg : vec3<u32>,
              @builtin(local_invocation_id) li : vec3<u32>,
              @builtin(local_invocation_index) lidx : u32) {
   loadTile16(wg, lidx, i32(P.width), i32(P.height));
 
-  var acc : array<vec4<f16>, 12>;
-  for (var ov = 0u; ov < 12u; ov++) { acc[ov] = vecs[P.biasBase + ov]; }
-  var m = P.matBase;
+  let by = li.z;
+  var accR = vecs[P.biasBase + by];
+  var accG = vecs[P.biasBase + 4u + by];
+  var accB = vecs[P.biasBase + 8u + by];
   for (var t = 0u; t < 9u; t++) {
     let tp = ((li.y + t / 3u) * 10u + li.x + (t % 3u)) * 16u;
     for (var iv = 0u; iv < 16u; iv++) {
       let v = tile16[tp + iv];
-      for (var ov = 0u; ov < 12u; ov++) {
-        acc[ov] += mats[m] * v;
-        m++;
-      }
+      let mb = P.matBase + (t * 16u + iv) * 12u;
+      accR += mats[mb + by] * v;
+      accG += mats[mb + 4u + by] * v;
+      accB += mats[mb + 8u + by] * v;
     }
   }
   let x = wg.x * TS + li.x; let y = wg.y * TS + li.y;
@@ -127,13 +134,10 @@ fn conv_last(@builtin(workgroup_id) wg : vec3<u32>,
     // CRD DepthToSpace: HR pixel (4x+bx, 4y+by), channel c comes from
     // conv output channel c*16 + by*4 + bx = vec-group c*4+by, lane bx.
     let res = textureLoad(inputTex, vec2<i32>(i32(x), i32(y)), 0).rgb;
-    for (var by = 0u; by < 4u; by++) {
-      for (var bx = 0u; bx < 4u; bx++) {
-        let rgb = vec3<f32>(f32(acc[by][bx]), f32(acc[4u + by][bx]),
-                            f32(acc[8u + by][bx])) + res;
-        textureStore(outTex, vec2<i32>(i32(x * 4u + bx), i32(y * 4u + by)),
-                     vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0));
-      }
+    for (var bx = 0u; bx < 4u; bx++) {
+      let rgb = vec3<f32>(f32(accR[bx]), f32(accG[bx]), f32(accB[bx])) + res;
+      textureStore(outTex, vec2<i32>(i32(x * 4u + bx), i32(y * 4u + by)),
+                   vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0));
     }
   }
 }

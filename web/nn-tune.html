@@ -182,6 +182,53 @@ fn conv_last2(@builtin(workgroup_id) wg : vec3<u32>,
     }
   }
 }
+
+// Channel-split conv_last: 4 threads per pixel, z-slice by computing out-vec4
+// groups {by, by+4, by+8} — the R/G/B planes of HR row by — and storing that
+// row's 4 texels. This is the split the native (naga) port ships, where it
+// measured 6.0ms -> 1.6ms bit-exact.
+@compute @workgroup_size(8, 8, 4)
+fn conv_last4(@builtin(workgroup_id) wg : vec3<u32>,
+              @builtin(local_invocation_id) li : vec3<u32>,
+              @builtin(local_invocation_index) lidx : u32) {
+  let iw = i32(P.width); let ih = i32(P.height);
+  let x0 = i32(wg.x * 8u) - 1; let y0 = i32(wg.y * 8u) - 1;
+  for (var p = lidx; p < 100u; p += 256u) {
+    let px = x0 + i32(p % 10u);
+    let py = y0 + i32(p / 10u);
+    if (px >= 0 && px < iw && py >= 0 && py < ih) {
+      let base = u32(py * iw + px) * 16u;
+      for (var c = 0u; c < 16u; c++) { tileL[p * 16u + c] = src[base + c]; }
+    } else {
+      for (var c = 0u; c < 16u; c++) { tileL[p * 16u + c] = vec4<f16>(); }
+    }
+  }
+  workgroupBarrier();
+
+  let by = li.z;
+  var accR = vecs[P.biasBase + by];
+  var accG = vecs[P.biasBase + 4u + by];
+  var accB = vecs[P.biasBase + 8u + by];
+  for (var t = 0u; t < 9u; t++) {
+    let tp = ((li.y + t / 3u) * 10u + li.x + (t % 3u)) * 16u;
+    for (var iv = 0u; iv < 16u; iv++) {
+      let v = tileL[tp + iv];
+      let mb = P.matBase + (t * 16u + iv) * 12u;
+      accR += mats[mb + by] * v;
+      accG += mats[mb + 4u + by] * v;
+      accB += mats[mb + 8u + by] * v;
+    }
+  }
+  let x = wg.x * 8u + li.x; let y = wg.y * 8u + li.y;
+  if (x < P.width && y < P.height) {
+    let res = textureLoad(inputTex, vec2<i32>(i32(x), i32(y)), 0).rgb;
+    for (var bx = 0u; bx < 4u; bx++) {
+      let rgb = vec3<f32>(f32(accR[bx]), f32(accG[bx]), f32(accB[bx])) + res;
+      textureStore(outTex, vec2<i32>(i32(x * 4u + bx), i32(y * 4u + by)),
+                   vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0));
+    }
+  }
+}
 `;
 
 // Parameterized conv_mid generator.
@@ -277,6 +324,7 @@ const VARIANTS = [
   { name: "s2b16L2",    tw: 16, th: 8, split: 2, last2: true },
   { name: "s2p2",       tw: 8,  th: 8, split: 2, px: 2 },
   { name: "s4p2",       tw: 8,  th: 8, split: 4, px: 2 },
+  { name: "s4p2L4",     tw: 8,  th: 8, split: 4, px: 2, last4: true },
   { name: "s4b16",      tw: 16, th: 4, split: 4 },
   { name: "s4p4tw4",    tw: 4,  th: 8, split: 4, px: 4 },
   { name: "s8p2t4",     tw: 8,  th: 4, split: 8, px: 2 },
@@ -384,10 +432,11 @@ async function main() {
     layout: device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
     compute: { module: device.createShaderModule({ code }), entryPoint },
   });
-  const [pFirst, pLast, pLast2] = await Promise.all([
+  const [pFirst, pLast, pLast2, pLast4] = await Promise.all([
     mkPipe(bglFirst, FIRST_LAST_WGSL, "conv_first"),
     mkPipe(bglLast, FIRST_LAST_WGSL, "conv_last"),
     mkPipe(bglLast, FIRST_LAST_WGSL, "conv_last2"),
+    mkPipe(bglLast, FIRST_LAST_WGSL, "conv_last4"),
   ]);
 
   let qs = null, qResolve = null, qRead = null;
@@ -414,7 +463,7 @@ async function main() {
       pass.setBindGroup(0, i % 2 === 0 ? bgMidAB : bgMidBA, [(1 + i) * 256]);
       pass.dispatchWorkgroups(gx, gy);
     }
-    pass.setPipeline(v.last2 ? pLast2 : pLast);
+    pass.setPipeline(v.last4 ? pLast4 : (v.last2 ? pLast2 : pLast));
     pass.setBindGroup(0, bgLast, [17 * 256]);
     pass.dispatchWorkgroups(GX, GY);
     pass.end();
