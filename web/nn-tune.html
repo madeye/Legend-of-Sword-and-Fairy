@@ -11,6 +11,7 @@
 <body>
 <h3>mega kernel conv_mid variants · GPU timestamps · 320x200 → 1280x800</h3>
 <div id="log">loading…</div>
+<script src="nn-upscale-qdq.js"></script>
 <script>
 "use strict";
 const W = 320, H = 200, SCALE = 4;
@@ -301,7 +302,8 @@ async function main() {
   const [manifest, weights, blob] = await Promise.all([
     fetch("models/realesr-animevideov3-fp16.mega.json").then((r) => r.json()),
     fetch("models/realesr-animevideov3-fp16.mega.bin").then((r) => r.arrayBuffer()),
-    fetch("nn-bench-input.png").then((r) => r.blob()),
+    fetch(new URLSearchParams(location.search).get("input") ||
+          "../screenshots/scene.png").then((r) => r.blob()),
   ]);
   const bmp = await createImageBitmap(blob);
   const cnv = document.createElement("canvas");
@@ -482,6 +484,39 @@ async function main() {
     results.push({ name: v.name, med, min: times[0] });
     log(`${v.name.padEnd(10)} gpu ${med.toFixed(2)}ms (min ${times[0].toFixed(2)}) ` +
         `maxdiff ${diff} shared ${shared}B`);
+  }
+  if (navigator.gpu.wgslLanguageFeatures?.has("packed_4x8_integer_dot_product")) {
+    const qCanvas = document.createElement("canvas");
+    const qdq = await NNUpscaler.create(qCanvas);
+    const pixels = cnv.getContext("2d").getImageData(0, 0, W, H).data;
+    for (let i = 0; i < 2; i++) await qdq.runNetwork(pixels);
+    const times = [];
+    for (let i = 0; i < 6; i++) times.push(await qdq.runNetwork(pixels));
+    times.sort((a, b) => a - b);
+    const med = times[times.length >> 1];
+    const out = await qdq.readback();
+    let maxd = 0, sumd = 0, sumsq = 0, over2 = 0;
+    for (let i = 0; i < out.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        const d = Math.abs(out[i + c] - reference[i + c]);
+        maxd = Math.max(maxd, d);
+        sumd += d;
+        sumsq += d * d;
+        if (d > 2) over2++;
+      }
+    }
+    const samples = out.length / 4 * 3;
+    const mean = sumd / samples;
+    const pct = over2 / samples * 100;
+    const psnr = 20 * Math.log10(255 / Math.sqrt(sumsq / samples));
+    const qname = `qdq-${qdq.midCfg.tw}x${qdq.midCfg.th}x${qdq.midCfg.split}` +
+      `-p${qdq.midCfg.px}`;
+    results.push({ name: qname, med, min: times[0] });
+    log(`${qname} gpu ${med.toFixed(2)}ms (min ${times[0].toFixed(2)}) ` +
+        `maxdiff ${maxd} mean ${mean.toFixed(4)} pct>2 ${pct.toFixed(3)}% ` +
+        `psnr ${psnr.toFixed(2)}dB`);
+  } else {
+    log("qdq-dp4a-f32 skipped: packed INT8 dot product unavailable");
   }
   results.sort((a, b) => a.med - b.med);
   log("BEST " + JSON.stringify(results.slice(0, 3)));
