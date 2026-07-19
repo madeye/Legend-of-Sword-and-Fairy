@@ -10,3 +10,5 @@ err.log
 /tools/voice/faces/
 /tools/voice/.venv/
 /tools/voice/samples/
+/tools/voice/.env
+/tools/voice/refs_long/

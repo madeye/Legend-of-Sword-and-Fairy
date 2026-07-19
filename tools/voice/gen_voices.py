@@ -39,7 +39,8 @@ SAMPLE_RATE = 16000  # bank sample rate (Qwen3-TTS outputs 24000)
 VORBIS_BITRATE = "20k"
 
 DESIGN_MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
-CLONE_MODEL = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-bf16"
+CLONE_MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
+REFS_LONG = HERE / "refs_long"
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +82,23 @@ def strip_control_codes(raw: bytes) -> bytes:
 
 
 def prepare_text(big5_hex: str, t2s) -> str:
+    import re
+
     raw = strip_control_codes(bytes.fromhex(big5_hex))
     text = raw.decode("big5", errors="ignore")
+    # Layout whitespace (full-width U+3000 pads, stray spaces/newlines) reads
+    # as unnatural pauses in TTS — drop it all; the text is pure Chinese.
+    for ws in ("　", " ", "\t", "\r", "\n"):
+        text = text.replace(ws, "")
+    # "∼" marks a drawn-out tone in the game script; as punctuation it reads
+    # best as a short pause. Runs of full-width dots are ellipses.
+    text = text.replace("∼", ",").replace("~", ",")
+    text = re.sub("．+", lambda m: "……" if len(m.group()) > 1 else "。", text)
+    # Collapse punctuation stacks the replacements may have created.
+    text = re.sub(r",+", ",", text).strip(",")
+    # Lines with no speakable content (pure ellipsis/punctuation) are silence.
+    if not re.search(r"[一-鿿0-9A-Za-z]", text):
+        return ""
     # The game text is traditional Chinese; the TTS is happier in simplified.
     text = t2s.convert(text).strip()
     return text
@@ -115,15 +131,16 @@ def ref_path(cid: str) -> Path:
 # Synthesis
 # ---------------------------------------------------------------------------
 
-def ref_tag(cid: str) -> str:
-    """Cache tag tied to the reference clip's content, so re-designing a
-    character's voice invalidates only that character's cached lines."""
+def qwen3_tag(cid: str) -> str:
+    """Cache tag tied to the clone model and the reference clip's content, so
+    re-designing a voice (or upgrading the model) invalidates only the
+    affected cached lines."""
     h = hashlib.sha1(ref_path(cid).read_bytes()).hexdigest()[:8]
-    return f"{cid}-{h}"
+    return f"q3b|{CLONE_MODEL}|{cid}-{h}"
 
 
 def cache_key(tag: str, text: str) -> Path:
-    h = hashlib.sha1(f"q3b|{tag}|{text}".encode()).hexdigest()
+    h = hashlib.sha1(f"{tag}|{text}".encode()).hexdigest()
     return CACHE / f"{h}.wav"
 
 
@@ -261,6 +278,140 @@ def pack_bank(path: Path, entries: dict):
 # Commands
 # ---------------------------------------------------------------------------
 
+def char_lines(messages, t2s, face_to_char):
+    """cid -> [(msg_id, text)] of its dialog lines (manifest order)."""
+    out = defaultdict(list)
+    for m in messages:
+        if m["kind"] != "dialog":
+            continue
+        cid = face_to_char.get(m["face"])
+        if cid is None:
+            continue
+        text = prepare_text(m["big5_hex"], t2s)
+        if text:
+            out[cid].append((m["msg"], text))
+    return out
+
+
+def cmd_extend_refs(messages, only=None):
+    """Build refs_long/<cid>.wav (>= ~15 s): the approved reference plus the
+    same timbre (Qwen3 1.7B clone) speaking the character's own longest game
+    lines. MiniMax voice cloning needs >= 10 s of source audio."""
+    import numpy as np
+    import opencc
+    import soundfile as sf
+
+    t2s = opencc.OpenCC("t2s")
+    chars, face_to_char = load_characters()
+    lines = char_lines(messages, t2s, face_to_char)
+    REFS_LONG.mkdir(exist_ok=True)
+    synth = CloneSynth(chars)
+
+    for cid in chars:
+        if only and cid not in only:
+            continue
+        if (REFS_LONG / f"{cid}.wav").exists():
+            continue
+        if not ref_path(cid).exists():
+            print(f"  {cid}: no base ref, skipping", file=sys.stderr)
+            continue
+        ref, rate = sf.read(ref_path(cid), dtype="float32")
+        parts = [ref]
+        total = len(ref) / rate
+        # Longest lines first: fewer synth calls to cross the bar.
+        for _, text in sorted(lines.get(cid, []), key=lambda x: -len(x[1]))[:8]:
+            if total >= 18.0:
+                break
+            audio = synth.generate(text, cid)
+            if audio is None:
+                continue
+            audio = np.asarray(audio)
+            parts += [np.zeros(int(0.35 * rate), dtype=np.float32), audio]
+            total += len(audio) / rate + 0.35
+        if total < 10.5:
+            print(f"  {cid}: only {total:.1f}s, below the 10 s clone minimum",
+                  file=sys.stderr)
+            continue
+        sf.write(REFS_LONG / f"{cid}.wav", np.concatenate(parts), rate)
+        print(f"  refs_long/{cid}.wav  {total:.1f}s")
+
+
+def cmd_mm_clone(only=None):
+    """Register MiniMax cloned voices for characters with refs_long."""
+    import minimax
+
+    chars, _ = load_characters()
+    voices = minimax.load_voices()
+    for cid in chars:
+        if only and cid not in only:
+            continue
+        if cid in voices:
+            continue
+        wav = REFS_LONG / f"{cid}.wav"
+        if not wav.exists():
+            continue
+        try:
+            voices[cid] = minimax.clone_voice(cid, wav)
+            print(f"  {cid} -> {voices[cid]['voice_id']}")
+        except Exception as e:
+            print(f"  {cid}: clone failed: {e}", file=sys.stderr)
+        minimax.VOICES_FILE.write_text(json.dumps(voices, indent=2) + "\n")
+    print(f"{len(voices)} cloned voices in {minimax.VOICES_FILE.name}")
+
+
+def build_blocks(messages, t2s, face_to_char, chars, scene_filter=None):
+    """Conversation blocks per scene: consecutive msg-id runs, keeping name
+    lines as speaker markers. Yields [(msg_id, cid, text, is_dialog)]."""
+    per_scene = defaultdict(list)
+    for m in messages:
+        for s in m["scenes"]:
+            if scene_filter and s not in scene_filter:
+                continue
+            per_scene[s].append(m)
+    blocks = []
+    for s in sorted(per_scene):
+        msgs = sorted({m["msg"]: m for m in per_scene[s]}.values(),
+                      key=lambda m: m["msg"])
+        block = []
+        prev = None
+        for m in msgs:
+            if prev is not None and m["msg"] - prev > 3 and block:
+                blocks.append(block)
+                block = []
+            text = prepare_text(m["big5_hex"], t2s)
+            cid = face_to_char.get(m["face"])
+            block.append((m["msg"], cid, text, m["kind"] == "dialog"))
+            prev = m["msg"]
+        if block:
+            blocks.append(block)
+    return blocks
+
+
+def cmd_tag_emotions(messages, scene_filter=None):
+    """Context-aware per-line emotion tags via a MiniMax text model."""
+    import opencc
+
+    import minimax
+
+    t2s = opencc.OpenCC("t2s")
+    chars, face_to_char = load_characters()
+    existing = {}
+    if minimax.EMOTIONS_FILE.exists():
+        existing = {int(k): v for k, v in
+                    json.loads(minimax.EMOTIONS_FILE.read_text()).items()}
+    blocks = build_blocks(messages, t2s, face_to_char, chars, scene_filter)
+    todo = [b for b in blocks
+            if any(d and m not in existing for m, _, _, d in b)]
+    print(f"{len(todo)} blocks to tag ({len(blocks)} total in scope)")
+    personas = {cid: f"{c['who']}({c['desc']})" for cid, c in chars.items()}
+    tags = minimax.tag_emotions(todo, personas)
+    existing.update(tags)
+    minimax.EMOTIONS_FILE.write_text(json.dumps(
+        {str(k): v for k, v in sorted(existing.items())},
+        ensure_ascii=False, indent=0) + "\n")
+    print(f"{len(tags)} lines tagged, {len(existing)} total")
+
+
 def cmd_design_refs(only=None):
     """Stage 1: create missing character reference clips with VoiceDesign."""
     import numpy as np
@@ -312,17 +463,40 @@ def cmd_list_faces(messages):
               f"{who:12s} {ref}  e.g. {by_face[face]['sample'] or ''}")
 
 
-def cmd_generate(messages, scene_filter, limit, dry_run):
+def cmd_generate(messages, scene_filter, limit, dry_run, engine):
     import opencc
     import soundfile as sf
 
     t2s = opencc.OpenCC("t2s")
     chars, face_to_char = load_characters()
-    synth = CloneSynth(chars)
     CACHE.mkdir(exist_ok=True)
 
-    missing_refs = {cid for cid in chars if not ref_path(cid).exists()}
-    tags = {cid: ref_tag(cid) for cid in chars if cid not in missing_refs}
+    emotions = {}
+    if engine == "minimax":
+        import minimax
+
+        voices = minimax.load_voices()
+        synth = minimax.Synth(voices)
+        ineligible = {cid for cid in chars if cid not in voices}
+        if minimax.EMOTIONS_FILE.exists():
+            emotions = {int(k): v for k, v in
+                        json.loads(minimax.EMOTIONS_FILE.read_text()).items()}
+
+        def tag_of(cid, msg):
+            emo = emotions.get(msg, "")
+            return f"mmx|{minimax.TTS_MODEL}|{voices[cid]['voice_id']}|{emo}"
+
+        def synthesize(text, cid, msg):
+            return synth.generate(text, cid, emotions.get(msg))
+    else:
+        synth = CloneSynth(chars)
+        ineligible = {cid for cid in chars if not ref_path(cid).exists()}
+
+        def tag_of(cid, msg):
+            return qwen3_tag(cid)
+
+        def synthesize(text, cid, msg):
+            return synth.generate(text, cid)
 
     banks = defaultdict(dict)  # scene -> msg_id -> cache path
     skipped = defaultdict(int)
@@ -334,7 +508,7 @@ def cmd_generate(messages, scene_filter, limit, dry_run):
         if scene_filter and not any(s in scene_filter for s in scenes):
             continue
         cid = face_to_char.get(m["face"])
-        if cid is None or cid in missing_refs:
+        if cid is None or cid in ineligible:
             skipped[m["face"]] += 1
             continue
         text = prepare_text(m["big5_hex"], t2s)
@@ -342,12 +516,17 @@ def cmd_generate(messages, scene_filter, limit, dry_run):
             continue
         todo.append((m["msg"], scenes, cid, text))
 
-    n_synth = sum(1 for _, _, c, t in todo if not cache_key(tags[c], t).exists())
-    print(f"{len(todo)} lines, {n_synth} to synthesize, "
+    # Group by (character, emotion): the MiniMax connection's voice settings
+    # are fixed at task_start, so this maximizes connection reuse.
+    todo.sort(key=lambda t: (t[2], emotions.get(t[0], "")))
+
+    n_synth = sum(1 for msg, _, c, t in todo
+                  if not cache_key(tag_of(c, msg), t).exists())
+    print(f"[{engine}] {len(todo)} lines, {n_synth} to synthesize, "
           f"{len(todo) - n_synth} cached; skipped faces: "
           f"{dict(sorted(skipped.items())) or 'none'}"
-          + (f"; characters missing refs: {sorted(missing_refs)}"
-             if missing_refs else ""))
+          + (f"; characters not usable with this engine: {sorted(ineligible)}"
+             if ineligible else ""))
     if dry_run:
         return
 
@@ -355,9 +534,9 @@ def cmd_generate(messages, scene_filter, limit, dry_run):
     for msg, scenes, cid, text in todo:
         if limit and done >= limit:
             break
-        path = cache_key(tags[cid], text)
+        path = cache_key(tag_of(cid, msg), text)
         if not path.exists():
-            audio = synth.generate(text, cid)
+            audio = synthesize(text, cid, msg)
             if audio is not None:
                 audio = postprocess(audio, 24000)
             if audio is None:
@@ -421,22 +600,39 @@ def main():
                     help="with --design-refs: limit to these character ids")
     ap.add_argument("--list-faces", action="store_true")
     ap.add_argument("--stats", action="store_true")
+    ap.add_argument("--extend-refs", action="store_true",
+                    help="build >=10s refs_long/ clips for MiniMax cloning")
+    ap.add_argument("--mm-clone", action="store_true",
+                    help="register MiniMax cloned voices from refs_long/")
+    ap.add_argument("--tag-emotions", action="store_true",
+                    help="tag per-line emotions from dialog context")
     ap.add_argument("--scenes", type=int, nargs="*", default=None)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--engine", choices=["qwen3", "minimax"], default="qwen3",
+                    help="qwen3: offline MLX clone (default); minimax: cloud "
+                         "cloned voices on speech-2.8-hd")
     args = ap.parse_args()
 
+    only = set(args.only) if args.only else None
     if args.design_refs:
-        cmd_design_refs(set(args.only) if args.only else None)
+        cmd_design_refs(only)
+        return
+    if args.mm_clone:
+        cmd_mm_clone(only)
         return
     messages = load_manifest()
-    if args.list_faces:
+    scenes = set(args.scenes or []) or None
+    if args.extend_refs:
+        cmd_extend_refs(messages, only)
+    elif args.tag_emotions:
+        cmd_tag_emotions(messages, scenes)
+    elif args.list_faces:
         cmd_list_faces(messages)
     elif args.stats:
         cmd_stats()
     else:
-        cmd_generate(messages, set(args.scenes or []) or None, args.limit,
-                     args.dry_run)
+        cmd_generate(messages, scenes, args.limit, args.dry_run, args.engine)
 
 
 if __name__ == "__main__":
