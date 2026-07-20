@@ -1058,12 +1058,29 @@ fn ui_update_end(engine: &mut Engine, battle: &mut Battle) {
     }
 
     let now = engine.ticks();
-    for slot in battle.ui.show_num.iter_mut() {
-        if slot.num > 0 && (now - slot.time) / BATTLE_FRAME_TIME > 10 {
-            slot.num = 0;
+    for i in 0..battle.ui.show_num.len() {
+        let slot = battle.ui.show_num[i];
+        if slot.num == 0 {
+            continue;
         }
-        // (Drawing the number goes through the ui.rs draw_number contract;
-        // omitted here to avoid per-frame allocation in the headless path.)
+        let elapsed = (now - slot.time) / BATTLE_FRAME_TIME;
+        if elapsed > 10 {
+            battle.ui.show_num[i].num = 0;
+        } else {
+            // The number floats upward as it ages (C: pos.y - elapsed frames).
+            let color = match slot.color {
+                1 => crate::ui::NumColor::Blue,
+                2 => crate::ui::NumColor::Cyan,
+                _ => crate::ui::NumColor::Yellow,
+            };
+            engine.draw_number(
+                slot.num as u32,
+                5,
+                (slot.pos.0, slot.pos.1 - elapsed as i32),
+                color,
+                crate::ui::NumAlign::Right,
+            );
+        }
     }
 
     engine.input.clear_key_state();

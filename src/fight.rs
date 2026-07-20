@@ -11,8 +11,10 @@
 #![allow(dead_code)] // used incrementally as engine bring-up proceeds
 
 use crate::battle::{
-    copy_scene_to_screen, fade_scene, make_scene, player_escape, Battle, BattleActionType,
-    BattleMenuState, BattlePhase, BattleResult, BattleUiState, FighterState, MAX_ACTIONQUEUE_ITEMS,
+    add_sprite_object, copy_scene_to_screen, fade_scene, make_scene, player_escape,
+    sprite_add_unlock, Battle, BattleActionType, BattleMenuState, BattlePhase, BattleResult,
+    BattleSpriteType, BattleUiState, FighterState, MAX_ACTIONQUEUE_ITEMS,
+    MAX_BATTLE_MAGICSPRITE_ITEMS,
 };
 use crate::game_loop::{Engine, BATTLE_FRAME_TIME};
 use crate::global::{
@@ -1188,34 +1190,312 @@ fn show_player_def_magic_anim(
     battle_delay(engine, battle, 4, 0, true);
 }
 
+/// Screen positions where the magic effect sprite is drawn for the
+/// area-of-effect magic types.  They differ depending on who casts: a player's
+/// spell lands on the enemy side (upper-left), an enemy's on the party side
+/// (lower-right).  See `PAL_BattleShowPlayerOffMagicAnim` /
+/// `PAL_BattleShowEnemyMagicAnim`.
+struct MagicEffectLayout {
+    attack_all: [(i32, i32); MAX_BATTLE_MAGICSPRITE_ITEMS],
+    attack_whole: (i32, i32),
+    attack_field: (i32, i32),
+}
+
+const PLAYER_CAST_LAYOUT: MagicEffectLayout = MagicEffectLayout {
+    attack_all: [(70, 140), (100, 110), (160, 100)],
+    attack_whole: (120, 100),
+    attack_field: (160, 200),
+};
+
+const ENEMY_CAST_LAYOUT: MagicEffectLayout = MagicEffectLayout {
+    attack_all: [(180, 180), (234, 170), (270, 146)],
+    attack_whole: (240, 150),
+    attack_field: (160, 200),
+};
+
+/// Who is casting the offensive magic — the caster's party is animated and the
+/// *opposing* party is jittered by the "blow" and targeted by the effect.
+enum MagicCaster {
+    /// Player at index (or -1 for the summon-effect / item paths).
+    Player(i32),
+    /// Enemy at index.
+    Enemy(usize),
+}
+
+/// On the final effect frame, burn the effect sprite into the battle
+/// background (C `PAL_RLEBlitToSurface(*b, lpBackground, ...)` for keep-effect
+/// magic).
+fn magic_keep_effect_blit(battle: &mut Battle, x: i32, y: i32) {
+    let bmp = std::mem::take(&mut battle.magic_bitmap);
+    let w = crate::surface::rle_width(&bmp) as i32;
+    let h = crate::surface::rle_height(&bmp) as i32;
+    battle.background.blit_rle(&bmp, x - w / 2, y - h);
+    battle.magic_bitmap = bmp;
+}
+
+/// Shared driver for `PAL_BattleShowPlayerOffMagicAnim` and
+/// `PAL_BattleShowEnemyMagicAnim`: plays the FIRE.MKF effect sprite frame by
+/// frame over the target(s), applying blow-jitter, screen shake and wave.
+fn run_offensive_magic_anim(
+    engine: &mut Engine,
+    battle: &mut Battle,
+    object_id: u16,
+    target: i16,
+    caster: MagicCaster,
+    _summon: bool,
+) {
+    if battle.instant {
+        return;
+    }
+
+    let magic_number = engine.globals.game.objects[object_id as usize].magic_number() as usize;
+    let effect_num = engine.globals.game.magics[magic_number].effect as usize;
+
+    // Load and decompress the effect sprite from FIRE.MKF.
+    let sprite = match engine.globals.files.fire.chunk_decompressed(effect_num) {
+        Ok(s) if !s.is_empty() => s,
+        _ => return,
+    };
+    let n = crate::surface::sprite_num_frames(&sprite) as i32;
+    if n <= 0 {
+        return;
+    }
+
+    // Snapshot the magic parameters (all scalars) up front.
+    let m = &engine.globals.game.magics[magic_number];
+    let fire_delay = m.fire_delay as i32;
+    let effect_times = m.effect_times as i16 as i32;
+    let shake = m.shake as i32;
+    let wave_add = m.wave;
+    let speed = m.speed as i32;
+    let keep_effect = m.keep_effect;
+    let x_offset = m.x_offset as i16 as i32;
+    let y_offset = m.y_offset as i16 as i32;
+    let magic_type = m.magic_type;
+    let sound = m.sound as i32;
+    let layer_offset = m.layer_offset();
+
+    let (enemy_casting, layout) = match caster {
+        MagicCaster::Enemy(_) => (true, &ENEMY_CAST_LAYOUT),
+        MagicCaster::Player(_) => (false, &PLAYER_CAST_LAYOUT),
+    };
+    let player_index = match caster {
+        MagicCaster::Player(pi) => pi,
+        MagicCaster::Enemy(_) => -1,
+    };
+    // Caster gesture frame info (enemy only).
+    let (enemy_idx, e_idle, e_magic, e_attack) = match caster {
+        MagicCaster::Enemy(ei) => {
+            let e = &battle.enemy[ei].e;
+            (
+                ei as i32,
+                e.idle_frames as i32,
+                e.magic_frames as i32,
+                e.attack_frames as i32,
+            )
+        }
+        MagicCaster::Player(_) => (-1, 0, 0, 0),
+    };
+
+    let mut dw_time = engine.ticks();
+
+    // The player offensive path holds the cast pose for one frame first.
+    if !enemy_casting {
+        battle_delay(engine, battle, 1, 0, true);
+    }
+
+    let mut l = (n - fire_delay) * effect_times + n + shake;
+    if l < 0 {
+        l = 0;
+    }
+
+    let wave_bak = engine.globals.screen_wave;
+    engine.globals.screen_wave = engine.globals.screen_wave.wrapping_add(wave_add);
+
+    for i in 0..l {
+        // DOS: the casting player switches to the cast pose at fire delay.
+        if !enemy_casting && i == fire_delay && player_index >= 0 {
+            battle.player[player_index as usize].current_frame = 6;
+        }
+
+        let blow = if battle.blow > 0 {
+            random_long(0, battle.blow)
+        } else {
+            random_long(battle.blow, 0)
+        };
+
+        // Jitter the *opposing* party by the blow amount.
+        if enemy_casting {
+            for k in 0..=engine.globals.max_party_member_index as usize {
+                let (px, py) = battle.player[k].pos;
+                battle.player[k].pos = (px + blow, py + blow / 2);
+            }
+        } else {
+            for k in 0..=battle.max_enemy_index as usize {
+                if battle.enemy[k].object_id == 0 {
+                    continue;
+                }
+                let (px, py) = battle.enemy[k].pos;
+                battle.enemy[k].pos = (px + blow, py + blow / 2);
+            }
+        }
+
+        let frame_k: i32 = if l - i > shake {
+            let k = if i < n {
+                i
+            } else {
+                let mut k = i - fire_delay;
+                k %= n - fire_delay;
+                k += fire_delay;
+                k
+            };
+            if enemy_casting {
+                if i == fire_delay {
+                    engine.play_sound(sound);
+                }
+                // Animate the enemy's cast gesture during the fire window.
+                if fire_delay > 0 && i >= fire_delay && i < fire_delay + e_attack {
+                    battle.enemy[enemy_idx as usize].current_frame =
+                        (i - fire_delay + e_idle + e_magic) as u16;
+                }
+            } else if (i - fire_delay) % n == 0 {
+                engine.play_sound(sound);
+            }
+            k
+        } else {
+            engine.shake_screen(i as u16, 3);
+            (l - shake - 1) % n
+        };
+
+        battle.magic_bitmap = crate::surface::sprite_frame(&sprite, frame_k as usize)
+            .map(|f| f.to_vec())
+            .unwrap_or_default();
+
+        engine.delay_until(dw_time);
+        dw_time = engine.ticks() + ((speed + 5) * 10).max(0) as u64;
+
+        // Rebuild the sprite draw sequence with the effect sprite(s) added.
+        sprite_add_unlock(battle);
+        let is_last = i == l - 1;
+        let keep = is_last && engine.globals.screen_wave < 9 && keep_effect == 0xFFFF;
+
+        match magic_type {
+            MAGICTYPE_NORMAL => {
+                let (tx, ty) = if enemy_casting {
+                    battle.player[target as usize].pos
+                } else {
+                    battle.enemy[target as usize].pos
+                };
+                let x = tx + x_offset;
+                let y = ty + y_offset;
+                add_sprite_object(
+                    battle,
+                    BattleSpriteType::Magic,
+                    magic_number as i32,
+                    (x, y),
+                    layer_offset,
+                    false,
+                );
+                if keep {
+                    magic_keep_effect_blit(battle, x, y);
+                }
+            }
+            MAGICTYPE_ATTACKALL => {
+                for &(bx, by) in layout.attack_all.iter() {
+                    let x = bx + x_offset;
+                    let y = by + y_offset;
+                    add_sprite_object(
+                        battle,
+                        BattleSpriteType::Magic,
+                        magic_number as i32,
+                        (x, y),
+                        layer_offset,
+                        false,
+                    );
+                    if keep {
+                        magic_keep_effect_blit(battle, x, y);
+                    }
+                }
+            }
+            MAGICTYPE_ATTACKWHOLE | MAGICTYPE_ATTACKFIELD => {
+                let (bx, by) = if magic_type == MAGICTYPE_ATTACKWHOLE {
+                    layout.attack_whole
+                } else {
+                    layout.attack_field
+                };
+                let x = bx + x_offset;
+                let y = by + y_offset;
+                add_sprite_object(
+                    battle,
+                    BattleSpriteType::Magic,
+                    magic_number as i32,
+                    (x, y),
+                    layer_offset,
+                    false,
+                );
+                if keep {
+                    magic_keep_effect_blit(battle, x, y);
+                }
+            }
+            _ => {}
+        }
+
+        make_scene(engine, battle);
+        copy_scene_to_screen(engine, battle);
+        crate::uibattle::ui_update(engine, battle);
+        engine.video_update();
+    }
+
+    engine.globals.screen_wave = wave_bak;
+    engine.shake_screen(0, 0);
+
+    // Restore the jittered party to their resting positions.
+    if enemy_casting {
+        for k in 0..=engine.globals.max_party_member_index as usize {
+            battle.player[k].pos = battle.player[k].pos_original;
+        }
+    } else {
+        for k in 0..=battle.max_enemy_index as usize {
+            battle.enemy[k].pos = battle.enemy[k].pos_original;
+        }
+    }
+}
+
 /// PAL_BattleShowPlayerOffMagicAnim.
 fn show_player_off_magic_anim(
     engine: &mut Engine,
     battle: &mut Battle,
     player_index: i32,
     object_id: u16,
-    _target: i16,
-    _summon: bool,
+    target: i16,
+    summon: bool,
 ) {
-    if battle.instant {
-        return;
-    }
-    let magic_number = engine.globals.game.objects[object_id as usize].magic_number() as usize;
-    engine.play_sound(engine.globals.game.magics[magic_number].sound as i32);
-    if player_index >= 0 {
-        battle.player[player_index as usize].current_frame = 6;
-    }
-    battle_delay(engine, battle, 4, 0, true);
+    run_offensive_magic_anim(
+        engine,
+        battle,
+        object_id,
+        target,
+        MagicCaster::Player(player_index),
+        summon,
+    );
 }
 
 /// PAL_BattleShowEnemyMagicAnim.
-fn show_enemy_magic_anim(engine: &mut Engine, battle: &mut Battle, object_id: u16) {
-    if battle.instant {
-        return;
-    }
-    let magic_number = engine.globals.game.objects[object_id as usize].magic_number() as usize;
-    engine.play_sound(engine.globals.game.magics[magic_number].sound as i32);
-    battle_delay(engine, battle, 4, 0, false);
+fn show_enemy_magic_anim(
+    engine: &mut Engine,
+    battle: &mut Battle,
+    enemy_index: u16,
+    object_id: u16,
+    target: i16,
+) {
+    run_offensive_magic_anim(
+        engine,
+        battle,
+        object_id,
+        target,
+        MagicCaster::Enemy(enemy_index as usize),
+        false,
+    );
 }
 
 /// PAL_BattleShowPlayerSummonMagicAnim.
@@ -1237,7 +1517,56 @@ fn show_player_summon_magic_anim(
             break;
         }
     }
-    battle_delay(engine, battle, 1, 0, true);
+
+    let speed = engine.globals.game.magics[magic_number].speed as i32;
+    let x_offset = engine.globals.game.magics[magic_number].x_offset as i16 as i32;
+    let y_offset = engine.globals.game.magics[magic_number].y_offset as i16 as i32;
+    let effect_times = engine.globals.game.magics[magic_number].effect_times as i16;
+    let summon_effect = engine.globals.game.magics[magic_number].summon_effect() as usize;
+
+    let mut dw_time = engine.ticks();
+
+    // Brighten the whole party over ten frames.
+    for i in 1..=10 {
+        for j in 0..=engine.globals.max_party_member_index as usize {
+            battle.player[j].color_shift = i;
+        }
+        battle_delay(engine, battle, 1, object_id, true);
+    }
+
+    // Back up the current (god-less) scene so the fade-in has a "from" image.
+    engine.backup_screen();
+
+    // Load the summoned-god sprite from F.MKF (chunk = wSummonEffect + 10).
+    battle.summon_sprite = engine
+        .globals
+        .files
+        .f
+        .chunk_decompressed(summon_effect + 10)
+        .unwrap_or_default();
+    battle.summon_frame = 0;
+    battle.pos_summon = (240 + x_offset, 165 + y_offset);
+    battle.background_color_shift = effect_times;
+    battle.summon_color_shift = true;
+
+    // Fade the summoned god in.
+    make_scene(engine, battle);
+    fade_scene(engine, battle);
+    battle.summon_color_shift = false;
+
+    // Play the god's animation frames.
+    let frames = crate::surface::sprite_num_frames(&battle.summon_sprite) as i32;
+    while battle.summon_frame < frames - 1 {
+        engine.delay_until(dw_time);
+        dw_time = engine.ticks() + ((speed + 5) * 10).max(0) as u64;
+        make_scene(engine, battle);
+        copy_scene_to_screen(engine, battle);
+        crate::uibattle::ui_update(engine, battle);
+        engine.video_update();
+        battle.summon_frame += 1;
+    }
+
+    // Then the actual offensive effect (god still on-screen).
     show_player_off_magic_anim(engine, battle, player_index, effect_magic_id, -1, true);
 }
 
@@ -2088,7 +2417,7 @@ pub fn battle_enemy_perform_action(engine: &mut Engine, battle: &mut Battle, ene
             engine.globals.game.objects[magic as usize].set_magic_script_on_use(ns);
 
             if engine.script.script_success {
-                show_enemy_magic_anim(engine, battle, magic);
+                show_enemy_magic_anim(engine, battle, enemy_index, magic, target);
                 let s = engine.globals.game.objects[magic as usize].magic_script_on_success();
                 let ns = engine.run_trigger_script_in_battle(battle, s, player_role as u16);
                 engine.globals.game.objects[magic as usize].set_magic_script_on_success(ns);

@@ -2,10 +2,12 @@
 //! the README battle demo GIF.
 //!
 //! Usage:
-//!   battlerecord list                        list non-empty enemy teams
-//!   battlerecord preview <dir> <team> <field> compose the scene, write PPM
-//!   battlerecord record <dir> <team> <field>  run the battle, dump frames
-//!   battlerecord play <dir> <team> <field>    run the battle in a window
+//!   battlerecord list                              list non-empty enemy teams
+//!   battlerecord preview <dir> <team> <field>       compose the scene, write PPM
+//!   battlerecord record <dir> <team> <field> [mus]  run the battle, dump frames
+//!   battlerecord play <dir> <team> <field> [mus]    run the battle in a window
+//!
+//! `mus` is the MUS.MKF battle-music track (default 6; 0 = silent).
 //!
 //! `record` writes `<dir>/frames.rgba` (concatenated 320x200 RGBA frames)
 //! and `<dir>/times.txt` (tick milliseconds per frame, one per line).
@@ -28,15 +30,17 @@ fn setup_party(e: &mut Engine) {
     }
 }
 
-/// Triple the enemies' health so the demo battle runs several rounds
-/// instead of ending in a one-hit sweep.
-fn boost_enemy_health(e: &mut Engine, team: u16) {
+/// Multiply the enemies' health so the demo battle runs several rounds instead
+/// of ending in a one-hit sweep.  Auto-battle (which casts area magic) clears
+/// enemies far faster than the human-cadence pilot, so it wants a bigger boost.
+fn boost_enemy_health(e: &mut Engine, team: u16, mult: u16) {
     let mut boosted = std::collections::HashSet::new();
     for j in 0..e.globals.game.enemy_teams[team as usize].enemy.len() {
         let w = e.globals.game.enemy_teams[team as usize].enemy[j];
         if w != 0 && w != 0xFFFF && boosted.insert(w) {
             let eid = e.globals.game.objects[w as usize].enemy_id() as usize;
-            e.globals.game.enemies[eid].health *= 3;
+            e.globals.game.enemies[eid].health =
+                e.globals.game.enemies[eid].health.saturating_mul(mult);
         }
     }
 }
@@ -85,6 +89,13 @@ fn main() {
         .nth(4)
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    // Battle music (MUS.MKF track). The real game sets this via script op
+    // 0x0045 before each encounter; this harness bypasses scripts, so pick a
+    // track here (default 6, the classic random-battle theme). 0 = silent.
+    let music: u16 = std::env::args()
+        .nth(5)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(6);
 
     seed_random(20260719);
     let mut e = Engine::new(mode != "play").expect("engine");
@@ -92,6 +103,7 @@ fn main() {
     e.globals.load_default_game().expect("default game");
     setup_party(&mut e);
     e.globals.num_battle_field = field;
+    e.globals.num_battle_music = music;
     if let Ok(p) = e.get_palette(e.globals.num_palette as usize, false) {
         e.palette = p;
     }
@@ -111,13 +123,13 @@ fn main() {
             println!("wrote {path}");
         }
         "play" => {
-            boost_enemy_health(&mut e, team);
+            boost_enemy_health(&mut e, team, 3);
             let result = e.start_battle(team, false);
             println!("battle result: {result:?}");
         }
         "record" => {
             std::fs::create_dir_all(&dir).expect("mkdir");
-            boost_enemy_health(&mut e, team);
+            boost_enemy_health(&mut e, team, 8);
             let frames = std::fs::File::create(format!("{dir}/frames.rgba")).expect("frames");
             let times = std::fs::File::create(format!("{dir}/times.txt")).expect("times");
             let mut frames = std::io::BufWriter::new(frames);
@@ -126,9 +138,11 @@ fn main() {
             // Natural pacing: the win/level-up panels use their key-or-timeout
             // waits instead of the headless instant-confirm escape hatch.
             e.ui.auto_confirm = false;
-            // The pilot walks the real battle menus (menu -> attack ->
-            // target -> confirm) at a human cadence.
-            e.demo_pilot = Some(0);
+            // Auto-battle drives the party through real turns, choosing the
+            // best offensive magic when one is worth casting (and physical
+            // attacks otherwise) -- so the demo exercises attack + damage
+            // numbers *and* the full magic-effect animation.
+            e.globals.auto_battle = true;
             e.frame_sink = Some(Box::new(move |rgba, ticks| {
                 frames.write_all(rgba).expect("write frame");
                 writeln!(times, "{ticks}").expect("write time");
