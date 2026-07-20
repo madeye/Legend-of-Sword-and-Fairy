@@ -31,8 +31,8 @@ fn setup_party(e: &mut Engine) {
 }
 
 /// Multiply the enemies' health so the demo battle runs several rounds instead
-/// of ending in a one-hit sweep.  Auto-battle (which casts area magic) clears
-/// enemies far faster than the human-cadence pilot, so it wants a bigger boost.
+/// of ending in a one-hit sweep.  The pilot casts area magic (via KEY_FORCE),
+/// which clears enemies faster than plain attacks, so it wants a bigger boost.
 fn boost_enemy_health(e: &mut Engine, team: u16, mult: u16) {
     let mut boosted = std::collections::HashSet::new();
     for j in 0..e.globals.game.enemy_teams[team as usize].enemy.len() {
@@ -129,7 +129,7 @@ fn main() {
         }
         "record" => {
             std::fs::create_dir_all(&dir).expect("mkdir");
-            boost_enemy_health(&mut e, team, 8);
+            boost_enemy_health(&mut e, team, 5);
             let frames = std::fs::File::create(format!("{dir}/frames.rgba")).expect("frames");
             let times = std::fs::File::create(format!("{dir}/times.txt")).expect("times");
             let mut frames = std::io::BufWriter::new(frames);
@@ -138,11 +138,11 @@ fn main() {
             // Natural pacing: the win/level-up panels use their key-or-timeout
             // waits instead of the headless instant-confirm escape hatch.
             e.ui.auto_confirm = false;
-            // Auto-battle drives the party through real turns, choosing the
-            // best offensive magic when one is worth casting (and physical
-            // attacks otherwise) -- so the demo exercises attack + damage
-            // numbers *and* the full magic-effect animation.
-            e.globals.auto_battle = true;
+            // The pilot presses KEY_FORCE on each command menu at a human
+            // cadence: the party auto-picks the best magic/attack per turn
+            // through the real UI, so the demo shows attacks, damage numbers,
+            // magic-effect animations *and* the character info boxes.
+            e.demo_pilot = Some(0);
             e.frame_sink = Some(Box::new(move |rgba, ticks| {
                 frames.write_all(rgba).expect("write frame");
                 writeln!(times, "{ticks}").expect("write time");

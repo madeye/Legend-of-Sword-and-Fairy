@@ -298,18 +298,21 @@ fn ui_update_body(engine: &mut Engine, battle: &mut Battle) {
     let s_frame = S_FRAME.load(Ordering::Relaxed);
     let max_party = engine.globals.max_party_member_index as usize;
 
-    // Demo-recording pilot: emulate a player pressing "confirm" at a human
-    // cadence whenever the UI waits for a command (used by the demo
-    // recording example; never set in normal play).
+    // Demo-recording pilot: at a human cadence, press the "force" key
+    // (single-turn auto) whenever a player is waiting on the main command
+    // menu (used by the demo recording example; never set in normal play).
+    // KEY_FORCE picks the best magic or attack for that player and commits
+    // it through the *normal* command UI -- so the demo exercises magic
+    // casting while keeping the character info boxes on screen, unlike
+    // `globals.auto_battle`, which (matching C's `goto end`) suppresses them.
     let now = engine.ticks();
     if let Some(next) = engine.demo_pilot.as_mut() {
-        let waiting = (battle.ui.state == BattleUiState::SelectMove
-            && battle.ui.menu_state == BattleMenuState::Main)
-            || battle.ui.state == BattleUiState::SelectTargetEnemy;
+        let waiting = battle.ui.state == BattleUiState::SelectMove
+            && battle.ui.menu_state == BattleMenuState::Main;
         if !waiting {
             *next = (*next).max(now + 700);
         } else if now >= *next {
-            engine.input.key_press |= KEY_SEARCH;
+            engine.input.key_press |= KEY_FORCE;
             *next = now + 800;
         }
     }
