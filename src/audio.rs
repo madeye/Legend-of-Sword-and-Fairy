@@ -138,10 +138,29 @@ impl Shared {
     }
 }
 
+/// Consumer of interleaved stereo samples produced by an offline mixer.
+#[cfg(not(target_arch = "wasm32"))]
+pub type AudioSink = Box<dyn FnMut(&[f32])>;
+
+/// Where a native mixer sends its samples.
+#[cfg(not(target_arch = "wasm32"))]
+enum Backend {
+    /// Real output device; cpal pulls from the mixer on its own thread.
+    Device(cpal::Stream),
+    /// Headless recording: samples are rendered on demand by `pump`, in step
+    /// with the engine clock, and handed to the sink.
+    Offline {
+        sink: std::cell::RefCell<AudioSink>,
+        /// Frames rendered so far (the audio clock, in output frames).
+        rendered: std::cell::Cell<u64>,
+        scratch: std::cell::RefCell<Vec<f32>>,
+    },
+}
+
 /// Software mixer. Everything is rendered at the output device's rate.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct Mixer {
-    _stream: cpal::Stream,
+    backend: Backend,
     shared: Arc<Mutex<Shared>>,
     out_rate: u32,
 }
@@ -173,10 +192,27 @@ impl Mixer {
         stream.play().ok()?;
 
         Some(Mixer {
-            _stream: stream,
+            backend: Backend::Device(stream),
             shared,
             out_rate,
         })
+    }
+
+    /// A mixer with no output device that renders in lockstep with the engine
+    /// clock: every `pump(now_ms)` produces exactly the stereo frames that a
+    /// real device would have consumed by `now_ms`, and passes them to `sink`.
+    /// Used by the headless recorder so the captured audio lines up with the
+    /// captured video frame for frame.
+    pub fn offline(out_rate: u32, sink: AudioSink) -> Mixer {
+        Mixer {
+            backend: Backend::Offline {
+                sink: std::cell::RefCell::new(sink),
+                rendered: std::cell::Cell::new(0),
+                scratch: std::cell::RefCell::new(Vec::new()),
+            },
+            shared: Arc::new(Mutex::new(Shared::new())),
+            out_rate,
+        }
     }
 
     pub fn out_rate(&self) -> u32 {
@@ -209,8 +245,30 @@ impl Mixer {
             .push(SoundInstance::from_voc(voc, self.out_rate));
     }
 
-    /// Native audio runs in the cpal callback; nothing to pump.
-    pub fn pump(&self) {}
+    /// Device audio runs in the cpal callback and needs no pumping; an offline
+    /// mixer renders up to the engine's current tick.
+    pub fn pump(&self, now_ms: u64) {
+        let Backend::Offline {
+            sink,
+            rendered,
+            scratch,
+        } = &self.backend
+        else {
+            return;
+        };
+        let target = now_ms * self.out_rate as u64 / 1000;
+        let have = rendered.get();
+        if target <= have {
+            return;
+        }
+        let need = (target - have) as usize;
+        let mut buf = scratch.borrow_mut();
+        buf.clear();
+        buf.resize(need * 2, 0.0);
+        self.shared.lock().unwrap().mix_into(&mut buf, 2);
+        (sink.borrow_mut())(&buf);
+        rendered.set(target);
+    }
 }
 
 /// Web mixer: renders ahead into the `PAL_AUDIO` SharedArrayBuffer ring that
@@ -287,8 +345,9 @@ impl Mixer {
 
     /// Top the ring buffer up to `target_ahead` frames. Called from
     /// `Engine::process_event`, i.e. every few ms whenever the engine pumps
-    /// events (delays, menus, frame waits).
-    pub fn pump(&self) {
+    /// events (delays, menus, frame waits).  The web ring is paced by the
+    /// AudioWorklet's read cursor, so the engine tick is not used.
+    pub fn pump(&self, _now_ms: u64) {
         let write = js_sys::Atomics::load(&self.header, 0).unwrap_or(0);
         let read = js_sys::Atomics::load(&self.header, 1).unwrap_or(0);
         let ahead = write.wrapping_sub(read) as u32;

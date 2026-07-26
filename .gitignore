@@ -5,3 +5,10 @@ reference/
 /web/pkg/
 err.log
 .claude/
+# autoplay/battlerecord output: raw captures and encoded video
+/out/
+*.rgba
+*.pcm
+*.mp4
+times.txt
+ffmpeg.log

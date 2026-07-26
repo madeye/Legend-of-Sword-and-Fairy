@@ -16,6 +16,9 @@ pub(crate) const INPUT_H: u32 = 200;
 const SCALE: u32 = 4;
 const OUTPUT_W: u32 = INPUT_W * SCALE;
 const OUTPUT_H: u32 = INPUT_H * SCALE;
+/// One row of the output texture. 5120 is already a multiple of wgpu's
+/// 256-byte copy alignment, so texture-to-buffer copies need no padding.
+const OUTPUT_ROW_BYTES: u64 = OUTPUT_W as u64 * 4;
 const VEC4_F16_BYTES: u64 = 8;
 const ACTIVATION_VECS_PER_PIXEL: u64 = 16;
 const ACTIVATION_BYTES: u64 =
@@ -164,7 +167,7 @@ const LAYERS: [LayerMeta; 18] = [
 pub(crate) struct NativeUpscaler {
     _uniform: wgpu::Buffer,
     input: wgpu::Texture,
-    _output: wgpu::Texture,
+    output: wgpu::Texture,
     first_bind_group: wgpu::BindGroup,
     mid_ab_bind_group: wgpu::BindGroup,
     mid_ba_bind_group: wgpu::BindGroup,
@@ -414,7 +417,7 @@ impl NativeUpscaler {
         Self {
             _uniform: uniform,
             input,
-            _output: output,
+            output,
             first_bind_group,
             mid_ab_bind_group,
             mid_ba_bind_group,
@@ -451,6 +454,43 @@ impl NativeUpscaler {
         );
     }
 
+    /// The upscaled image, `OUTPUT_W`x`OUTPUT_H` `Rgba8Unorm` with `COPY_SRC`:
+    /// what `encode_network` writes, before the blit stretches it onto a
+    /// surface.  The offline recorder reads it back instead of blitting.
+    pub(crate) fn output_texture(&self) -> &wgpu::Texture {
+        &self.output
+    }
+
+    /// Run the 18-layer network over the uploaded input into `output_texture`.
+    pub(crate) fn encode_network(&self, encoder: &mut wgpu::CommandEncoder) {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("native upscale network"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.first_pipeline);
+        pass.set_bind_group(0, &self.first_bind_group, &[uniform_offset(0)]);
+        pass.dispatch_workgroups(INPUT_W.div_ceil(8), INPUT_H.div_ceil(8), 1);
+
+        pass.set_pipeline(&self.mid_pipeline);
+        for layer in 0..16 {
+            let bind_group = if layer % 2 == 0 {
+                &self.mid_ab_bind_group
+            } else {
+                &self.mid_ba_bind_group
+            };
+            pass.set_bind_group(0, bind_group, &[uniform_offset(layer + 1)]);
+            pass.dispatch_workgroups(
+                INPUT_W.div_ceil(self.mid_pixels_per_workgroup),
+                INPUT_H.div_ceil(8),
+                1,
+            );
+        }
+
+        pass.set_pipeline(&self.last_pipeline);
+        pass.set_bind_group(0, &self.last_bind_group, &[uniform_offset(17)]);
+        pass.dispatch_workgroups(INPUT_W.div_ceil(8), INPUT_H.div_ceil(8), 1);
+    }
+
     pub(crate) fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -460,34 +500,7 @@ impl NativeUpscaler {
         viewport_width: f32,
         viewport_height: f32,
     ) {
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("native upscale network"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.first_pipeline);
-            pass.set_bind_group(0, &self.first_bind_group, &[uniform_offset(0)]);
-            pass.dispatch_workgroups(INPUT_W.div_ceil(8), INPUT_H.div_ceil(8), 1);
-
-            pass.set_pipeline(&self.mid_pipeline);
-            for layer in 0..16 {
-                let bind_group = if layer % 2 == 0 {
-                    &self.mid_ab_bind_group
-                } else {
-                    &self.mid_ba_bind_group
-                };
-                pass.set_bind_group(0, bind_group, &[uniform_offset(layer + 1)]);
-                pass.dispatch_workgroups(
-                    INPUT_W.div_ceil(self.mid_pixels_per_workgroup),
-                    INPUT_H.div_ceil(8),
-                    1,
-                );
-            }
-
-            pass.set_pipeline(&self.last_pipeline);
-            pass.set_bind_group(0, &self.last_bind_group, &[uniform_offset(17)]);
-            pass.dispatch_workgroups(INPUT_W.div_ceil(8), INPUT_H.div_ceil(8), 1);
-        }
+        self.encode_network(encoder);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("native upscale presentation"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -516,6 +529,72 @@ impl NativeUpscaler {
         );
         pass.draw(0..3, 0..1);
     }
+}
+
+/// A windowless wgpu device able to run the upscale network.
+pub(crate) struct HeadlessGpu {
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
+    pub(crate) adapter_info: wgpu::AdapterInfo,
+    /// What the adapter offers before clamping.  Only the kernel benchmark
+    /// reports it; the offline recorder just wants the device.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) adapter_limits: wgpu::Limits,
+    /// The adapter offered `PASSTHROUGH_SHADERS`, so it was requested too.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) passthrough: bool,
+}
+
+/// Open a device with no surface attached, for callers that only want the
+/// network's output texture: the offline recorder and the kernel benchmark.
+/// The game itself takes its device from `pixels` instead, because it has to
+/// present.  `SHADER_F16` is mandatory — the kernels are FP16 throughout —
+/// so this returns `None` on an adapter without it.
+///
+/// Every limit is clamped to what the adapter reports, so the request always
+/// succeeds; `max_compute_workgroup_storage_size` is what selects the fast
+/// `conv_mid` variant (see `fast_mid`), and both variants are byte-identical
+/// in output, so a smaller device is slower but not different.
+pub(crate) fn request_headless_gpu() -> Option<HeadlessGpu> {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .ok()?;
+    let mut needed = wgpu::Features::SHADER_F16;
+    if !adapter.features().contains(needed) {
+        return None;
+    }
+    let passthrough = adapter
+        .features()
+        .contains(wgpu::Features::PASSTHROUGH_SHADERS);
+    if passthrough {
+        needed |= wgpu::Features::PASSTHROUGH_SHADERS;
+    }
+    let adapter_limits = adapter.limits();
+    let limits = wgpu::Limits {
+        max_compute_workgroup_storage_size: adapter_limits
+            .max_compute_workgroup_storage_size
+            .min(32_768),
+        max_compute_invocations_per_workgroup: adapter_limits
+            .max_compute_invocations_per_workgroup
+            .min(1024),
+        max_compute_workgroup_size_z: adapter_limits.max_compute_workgroup_size_z.min(64),
+        ..Default::default()
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("rustpal headless neural upscale device"),
+        required_features: needed,
+        required_limits: limits,
+        ..Default::default()
+    }))
+    .ok()?;
+    Some(HeadlessGpu {
+        device,
+        queue,
+        adapter_info: adapter.get_info(),
+        adapter_limits,
+        passthrough,
+    })
 }
 
 fn validate_model_metadata() {
@@ -692,6 +771,8 @@ fn last_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         ],
     })
 }
+
+pub mod offline;
 
 #[cfg(test)]
 mod bench;
