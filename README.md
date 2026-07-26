@@ -21,6 +21,40 @@ Set `RUSTPAL_DISABLE_GPU_UPSCALE=1` to use nearest-neighbor scaling.
 
 ![](./screenshots/battle-demo.gif)
 
+#### 自动游玩录制 / Autoplay recording
+
+`examples/autoplay.rs` 让引擎自己玩并录成 1280×800 的视频（经神经网络放大，
+含原版 OPL 音乐与音效）：
+
+```shell
+cargo run --release --example autoplay -- out 300 30   # 输出 out/autoplay.mp4
+cargo run --release --example autoplay -- record out 300   # 只录制
+cargo run --release --example autoplay -- encode out 30    # 只编码（可重复调参）
+```
+
+它给引擎装上一副“合成键盘”（`Engine::autopilot`，在引擎读键盘的地方按/放键）和
+一台离线混音器（`Mixer::offline`，按引擎时钟渲染采样），因此开场动画、菜单、剧情
+对话、战斗全部走正常流程——没有任何快进或桩实现。
+
+录制分两步：引擎时钟就是真实时钟（`Engine::ticks`），而放大网络每帧要几十毫秒，
+边玩边放大会让画面落后于真实时间、而音乐不会，于是画面相对声音变成慢动作。所以
+**record** 只实时转储 320×200 原始帧、每帧的引擎时刻和 PCM 音频；**encode** 事后
+不赶时间地把每个不同的帧送进放大网络，按引擎时刻做 sample-and-hold 重采样到固定
+帧率，再与音频合成 mp4。中间文件保留着，改帧率重新 encode 不必重玩一遍。
+
+The engine plays itself and records the result (with the original OPL music and
+sound effects): a synthetic keyboard presses keys wherever the engine reads the
+real one, and an offline mixer renders audio in lockstep with the engine clock,
+so every dialog, menu, script and battle runs the normal way.
+
+Recording is split in two because the engine clock *is* wall clock and the
+neural network costs tens of milliseconds a frame: upscaling while the game runs
+would put the picture into slow motion against music that kept its pace. So
+`record` dumps raw 320×200 frames, their engine ticks and the audio in real
+time, and `encode` comes back afterwards with no deadline to upscale each
+distinct frame, resample to a constant frame rate and mux. Requires `ffmpeg` and
+a GPU with `shader-f16`; the intermediates are kept so a re-encode is cheap.
+
 #### 运行 / Running
 
 ```shell

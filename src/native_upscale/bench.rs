@@ -12,7 +12,6 @@ use super::*;
 
 const RUNS: usize = 15;
 const BATCH: usize = 4;
-const OUTPUT_ROW_BYTES: u64 = OUTPUT_W as u64 * 4;
 const OUTPUT_BYTES: u64 = OUTPUT_ROW_BYTES * OUTPUT_H as u64;
 
 struct Gpu {
@@ -24,43 +23,22 @@ struct Gpu {
 
 impl Gpu {
     fn new() -> Option<Gpu> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
-        let mut needed = wgpu::Features::SHADER_F16;
-        if !adapter.features().contains(needed) {
-            eprintln!("bench: adapter lacks SHADER_F16, skipping");
+        let Some(gpu) = request_headless_gpu() else {
+            eprintln!("bench: no adapter with SHADER_F16, skipping");
             return None;
-        }
-        let passthrough = adapter
-            .features()
-            .contains(wgpu::Features::PASSTHROUGH_SHADERS);
-        if passthrough {
-            needed |= wgpu::Features::PASSTHROUGH_SHADERS;
-        }
-        let adapter_limits = adapter.limits();
-        let limits = wgpu::Limits {
-            max_compute_workgroup_storage_size: adapter_limits
-                .max_compute_workgroup_storage_size
-                .min(32_768),
-            max_compute_invocations_per_workgroup: adapter_limits
-                .max_compute_invocations_per_workgroup
-                .min(1024),
-            max_compute_workgroup_size_z: adapter_limits.max_compute_workgroup_size_z.min(64),
-            ..Default::default()
         };
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("upscale bench device"),
-            required_features: needed,
-            required_limits: limits,
-            ..Default::default()
-        }))
-        .ok()?;
-        let info = adapter.get_info();
+        let HeadlessGpu {
+            device,
+            queue,
+            adapter_info,
+            adapter_limits,
+            passthrough,
+        } = gpu;
         eprintln!(
             "bench: {} ({:?}), max invocations {}",
-            info.name, info.backend, adapter_limits.max_compute_invocations_per_workgroup,
+            adapter_info.name,
+            adapter_info.backend,
+            adapter_limits.max_compute_invocations_per_workgroup,
         );
         let output_read = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bench output read"),
@@ -116,7 +94,7 @@ impl Gpu {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &up._output,
+                texture: up.output_texture(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
