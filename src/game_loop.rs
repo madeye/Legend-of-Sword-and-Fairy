@@ -254,6 +254,7 @@ impl ApplicationHandler for VideoApp {
 pub struct Video {
     event_loop: EventLoop<()>,
     app: VideoApp,
+    ui_driver: Option<crate::ui_driver::UiDriver>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -261,6 +262,16 @@ impl Video {
     pub fn new() -> io::Result<Video> {
         let event_loop =
             EventLoop::new().map_err(|e| io::Error::other(format!("winit event loop: {e}")))?;
+        let ui_driver = match std::env::var("RUSTPAL_UI_DRIVER") {
+            Ok(bind) => Some(crate::ui_driver::UiDriver::start(&bind)?),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(error) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid RUSTPAL_UI_DRIVER: {error}"),
+                ))
+            }
+        };
         Ok(Video {
             event_loop,
             app: VideoApp {
@@ -281,6 +292,7 @@ impl Video {
                 enhanced_baseline: None,
                 enhanced_target_palette: None,
             },
+            ui_driver,
         })
     }
 
@@ -288,11 +300,18 @@ impl Video {
     fn pump(&mut self) -> Vec<(winit::keyboard::KeyCode, bool)> {
         self.event_loop
             .pump_app_events(Some(Duration::ZERO), &mut self.app);
-        std::mem::take(&mut self.app.key_events)
+        let mut events = std::mem::take(&mut self.app.key_events);
+        if let Some(driver) = self.ui_driver.as_ref() {
+            driver.drain_input(&mut events);
+        }
+        events
     }
 
     /// Present an indexed surface with the given palette.
     fn present(&mut self, surf: &Surface, palette: &[PalColor; 256], shake: Option<(u16, u16)>) {
+        if let Some(driver) = self.ui_driver.as_mut() {
+            driver.capture(surf, palette, shake);
+        }
         let Some(pixels) = self.app.pixels.as_mut() else {
             return;
         };

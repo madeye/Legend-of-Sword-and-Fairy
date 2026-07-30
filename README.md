@@ -29,6 +29,28 @@ cargo run --release
 
 操作：方向键移动，空格/回车 调查·确认，Esc 菜单；战斗中 R 连续攻击、A 自动、D 防御、E 物品、W 投掷、Q 逃跑、F 仙术、S 状态。
 
+#### 本地控制 API / Local control API
+
+原生版可选择启用仅监听回环地址的 HTTP 控制接口，供自动化程序读取当前
+320×200 游戏画面并发送与真实键盘相同的按键事件：
+
+```shell
+cargo run --release -- --ui-driver
+
+curl http://127.0.0.1:8765/v1/status
+curl http://127.0.0.1:8765/v1/frame.png -o frame.png
+curl -X POST http://127.0.0.1:8765/v1/input/confirm/tap
+curl -X POST http://127.0.0.1:8765/v1/input/up/press
+curl -X POST http://127.0.0.1:8765/v1/input/up/release
+```
+
+默认地址为 `127.0.0.1:8765`，也可使用
+`--ui-driver=127.0.0.1:PORT` 或环境变量 `RUSTPAL_UI_DRIVER` 指定。
+接口拒绝监听非回环地址。可用按键名称：`up`、`down`、`left`、`right`、
+`menu`、`confirm`、`space`、`page_up`、`page_down`、`home`、`end`、
+`repeat`、`auto`、`defend`、`use_item`、`throw_item`、`flee`、`force`、
+`status`。
+
 #### 浏览器版 / Running in the browser (wasm)
 
 **在线试玩 / Play online**: <https://madeye.github.io/Legend-of-Sword-and-Fairy/>
