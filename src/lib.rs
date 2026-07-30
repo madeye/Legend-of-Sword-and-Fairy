@@ -27,6 +27,8 @@ pub mod script;
 pub mod surface;
 pub mod text;
 pub mod ui;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ui_driver;
 pub mod uibattle;
 pub mod uigame;
 pub mod voc;
