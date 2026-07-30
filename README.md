@@ -35,7 +35,7 @@ cargo run --release
 320×200 游戏画面并发送与真实键盘相同的按键事件：
 
 ```shell
-cargo run --release -- --ui-driver
+cargo run --release -- --ui-driver --offscreen
 
 curl http://127.0.0.1:8765/v1/status
 curl http://127.0.0.1:8765/v1/frame.png -o frame.png
@@ -46,10 +46,20 @@ curl -X POST http://127.0.0.1:8765/v1/input/up/release
 
 默认地址为 `127.0.0.1:8765`，也可使用
 `--ui-driver=127.0.0.1:PORT` 或环境变量 `RUSTPAL_UI_DRIVER` 指定。
+`--offscreen` 会继续渲染和捕获画面，但从一开始就不显示原生游戏窗口，
+同时禁用音乐和音效。也可分别使用环境变量 `RUSTPAL_OFFSCREEN` 和
+`RUSTPAL_DISABLE_AUDIO`，或通过 `--mute` 仅关闭声音。
 接口拒绝监听非回环地址。可用按键名称：`up`、`down`、`left`、`right`、
 `menu`、`confirm`、`space`、`page_up`、`page_down`、`home`、`end`、
 `repeat`、`auto`、`defend`、`use_item`、`throw_item`、`flee`、`force`、
 `status`。
+
+完整接口说明、自动游玩流程和本次无窗口运行的进度截图见
+[Offscreen Autoplay](docs/autoplay.md)。
+
+| 自动进入开场剧情 | 自动离开初始房间 | 自动探索客栈 |
+| --- | --- | --- |
+| ![](./screenshots/autoplay/02-opening-dialogue.png) | ![](./screenshots/autoplay/04-left-bedroom.png) | ![](./screenshots/autoplay/06-stair-navigation.png) |
 
 #### 浏览器版 / Running in the browser (wasm)
 

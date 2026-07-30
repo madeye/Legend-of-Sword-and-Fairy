@@ -157,6 +157,7 @@ impl ApplicationHandler for VideoApp {
         }
         let attrs = Window::default_attributes()
             .with_title("rustpal — 仙劍奇俠傳")
+            .with_visible(std::env::var_os("RUSTPAL_OFFSCREEN").is_none())
             .with_inner_size(winit::dpi::LogicalSize::new(
                 DISPLAY_W as f64,
                 DISPLAY_H as f64,
@@ -587,7 +588,7 @@ impl Engine {
         let font = Font::load(&data_dir)?;
         let globals = Globals::init(data_dir)?;
         let video = if headless { None } else { Some(Video::new()?) };
-        let audio = if headless {
+        let audio = if headless || std::env::var_os("RUSTPAL_DISABLE_AUDIO").is_some() {
             None
         } else {
             crate::audio::Mixer::new()
