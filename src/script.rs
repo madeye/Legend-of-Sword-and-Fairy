@@ -2377,6 +2377,7 @@ impl Engine {
     /// `PAL_RunTriggerScript`: run a trigger script; returns the entry point
     /// of the script to save back.
     pub fn run_trigger_script(&mut self, script_entry: u16, event_object_id: u16) -> u16 {
+        let trace_script = std::env::var_os("RUSTPAL_SCRIPT_TRACE").is_some();
         let mut event_object_id = event_object_id;
         let mut script_entry = script_entry;
         let mut next_script_entry = script_entry;
@@ -2395,6 +2396,12 @@ impl Engine {
 
         while script_entry != 0 && !ended {
             let script = self.globals.game.script_entries[script_entry as usize];
+            if trace_script {
+                eprintln!(
+                    "script trace entry={} operation={:04X} event={}",
+                    script_entry, script.operation, event_object_id
+                );
+            }
             let op = script.operand;
             let evt_idx = event_object_id.wrapping_sub(1) as usize;
 
@@ -2486,7 +2493,7 @@ impl Engine {
                 0x0007 => {
                     let result = self.start_battle(op[0], op[2] == 0);
                     use crate::battle::BattleResult;
-                    if result == BattleResult::Lost && op[1] != 0 {
+                    if result == BattleResult::Lost && op[1] != 0 && !self.battle_force_win {
                         script_entry = op[1];
                     } else if result == BattleResult::Fleed && op[2] != 0 {
                         script_entry = op[2];

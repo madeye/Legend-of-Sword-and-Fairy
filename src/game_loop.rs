@@ -537,6 +537,10 @@ pub struct Engine {
     pub input: InputState,
     video: Option<Video>,
     start: Instant,
+    /// Multiplier for the monotonic game clock. This is configurable only for
+    /// headless tools so probes can run faster while retaining game-time
+    /// timestamps for captured frames.
+    tick_scale: u64,
 
     /// Set when the user asked to quit (window close / Alt+F4).
     pub quit_requested: bool,
@@ -556,6 +560,9 @@ pub struct Engine {
     /// the `instant` fast path — all game logic runs, rendering/waiting is
     /// skipped.  Off in normal play; tests set it to fight real battles fast.
     pub battle_instant: bool,
+    /// Route-probe override: treat a simulated battle loss as a win when the
+    /// caller needs deterministic story progression.
+    pub battle_force_win: bool,
 
     /// Optional per-present capture hook (headless recording tools).  Called
     /// on every presented frame with the 320×200 RGBA image (shake applied,
@@ -593,6 +600,15 @@ impl Engine {
         } else {
             crate::audio::Mixer::new()
         };
+        let tick_scale = if headless {
+            std::env::var("RUSTPAL_HEADLESS_TIME_SCALE")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|&value| value > 0)
+                .unwrap_or(1)
+        } else {
+            1
+        };
 
         let mut engine = Engine {
             globals,
@@ -614,10 +630,12 @@ impl Engine {
             input: InputState::new(),
             video,
             start: Instant::now(),
+            tick_scale,
             quit_requested: false,
             ending_effect_sprite: 0,
             battle: None,
             battle_instant: false,
+            battle_force_win: false,
             frame_sink: None,
             demo_pilot: None,
             script: Default::default(),
@@ -634,7 +652,7 @@ impl Engine {
 
     /// Milliseconds since engine start (SDL_GetTicks equivalent).
     pub fn ticks(&self) -> u64 {
-        self.start.elapsed().as_millis() as u64
+        (self.start.elapsed().as_millis() as u64).saturating_mul(self.tick_scale)
     }
 
     /// PAL_ProcessEvent: pump window events and update the input state.

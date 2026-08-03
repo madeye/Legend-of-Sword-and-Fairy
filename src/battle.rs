@@ -1058,17 +1058,22 @@ fn battle_won(engine: &mut Engine, battle: &mut Battle) {
         orig_player_roles = engine.globals.game.player_roles;
 
         // Learn all magics for the current level.
-        let mut j = 0;
-        while j < engine.globals.game.level_up_magics.len() {
-            let (mlevel, magic) = engine.globals.game.level_up_magics[j].m[w];
-            if magic == 0 || mlevel > engine.globals.game.player_roles.level[w] {
+        // The data file only contains level-up magic tables for the five
+        // playable roles. Plot-controlled guest role 5 can temporarily join
+        // the party and still receives EXP, but has no entry in that table.
+        if w < MAX_PLAYABLE_PLAYER_ROLES {
+            let mut j = 0;
+            while j < engine.globals.game.level_up_magics.len() {
+                let (mlevel, magic) = engine.globals.game.level_up_magics[j].m[w];
+                if magic == 0 || mlevel > engine.globals.game.player_roles.level[w] {
+                    j += 1;
+                    continue;
+                }
+                if engine.globals.add_magic(w, magic) && !battle.instant {
+                    wait_for_any_key(engine, battle, 3000);
+                }
                 j += 1;
-                continue;
             }
-            if engine.globals.add_magic(w, magic) && !battle.instant {
-                wait_for_any_key(engine, battle, 3000);
-            }
-            j += 1;
         }
     }
 
@@ -1269,6 +1274,17 @@ fn battle_main(engine: &mut Engine, battle: &mut Battle) -> BattleResult {
     }
     if battle.battle_result == BattleResult::PreBattle {
         battle.battle_result = BattleResult::OnGoing;
+    }
+
+    if engine.battle_force_win && battle.battle_result == BattleResult::OnGoing {
+        // Preserve enemy loading and the normal victory path so experience,
+        // item drops, and post-battle scripts still execute. Only replace the
+        // combat resolution itself with a deterministic clear.
+        for enemy in &mut battle.enemy[..=battle.max_enemy_index as usize] {
+            enemy.e.health = 0;
+        }
+        crate::fight::battle_post_action_check(engine, battle, false);
+        battle.battle_result = BattleResult::Won;
     }
 
     let mut time = engine.ticks();

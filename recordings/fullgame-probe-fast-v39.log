@@ -1,0 +1,364 @@
+resuming recordings/autoplay-probe-checkpoint.rpg at scene=49 position=(672, 1312)
+target scene=49 area=(160, 112) event=810 script=14191 mode=2 state=2 player=(832, 1424) pos=(640, 1360) path=21
+target scene=49 area=(160, 112) event=831 script=14355 mode=2 state=1 player=(688, 1384) pos=(256, 1408) path=24
+used story item=284 on event=831 facing=0 script 14355 -> 14358 mode 2 -> 6 state 1 -> 1
+target scene=49 area=(160, 112) event=813 script=14272 mode=2 state=2 player=(272, 1400) pos=(1072, 1304) path=47
+target scene=49 area=(160, 112) event=812 script=14266 mode=2 state=2 player=(1024, 1312) pos=(1088, 1296) path=1
+target scene=49 area=(160, 112) event=839 script=14348 mode=2 state=2 player=(1040, 1304) pos=(976, 904) path=47
+target scene=49 area=(160, 112) event=838 script=14342 mode=2 state=2 player=(1024, 928) pos=(944, 888) path=2
+target scene=49 area=(160, 112) event=837 script=14338 mode=2 state=2 player=(992, 912) pos=(944, 872) path=2
+target scene=49 area=(160, 112) event=836 script=14333 mode=2 state=2 player=(992, 896) pos=(928, 864) path=1
+target scene=49 area=(160, 112) event=833 script=14316 mode=2 state=2 player=(976, 888) pos=(928, 848) path=6
+target scene=49 area=(160, 112) event=835 script=14329 mode=2 state=2 player=(912, 872) pos=(880, 856) path=0
+target scene=49 area=(160, 112) event=834 script=14324 mode=2 state=2 player=(912, 872) pos=(880, 840) path=1
+target scene=49 area=(160, 112) event=840 script=14351 mode=2 state=2 player=(896, 864) pos=(864, 832) path=1
+directing unreachable manual event=817 script=14282 mode=2 state=2
+target scene=49 area=(160, 112) event=817 script=14282 mode=2 state=2 player=(912, 856) pos=(1352, 852) path=0
+target scene=49 area=(160, 112) event=814 script=14276 mode=2 state=2 player=(912, 856) pos=(912, 600) path=33
+target scene=49 area=(160, 112) event=818 script=14286 mode=2 state=2 player=(960, 624) pos=(1312, 800) path=19
+target scene=49 area=(160, 112) event=819 script=14306 mode=2 state=2 player=(1264, 776) pos=(1424, 824) path=7
+target scene=49 area=(160, 112) event=803 script=14111 mode=5 state=1 player=(1376, 800) pos=(1632, 704) path=14
+learned targeted exit AreaKey { scene: 49, anchor: (160, 112) } event=803 -> AreaKey { scene: 52, anchor: (192, 1376) }
+learned exit AreaKey { scene: 49, anchor: (160, 112) } event=803 -> AreaKey { scene: 52, anchor: (192, 1376) }
+scene 49 -> 52 at frame 351 position (256, 1152)
+target scene=52 area=(192, 1376) event=887 script=14633 mode=1 state=1 player=(416, 1264) pos=(480, 848) path=51
+target scene=52 area=(192, 1376) event=898 script=14688 mode=2 state=2 player=(496, 856) pos=(848, 888) path=19
+target scene=52 area=(192, 1376) event=890 script=14587 mode=2 state=2 player=(800, 896) pos=(1008, 904) path=10
+target scene=52 area=(192, 1376) event=891 script=14592 mode=2 state=2 player=(960, 880) pos=(992, 880) path=0
+target scene=52 area=(192, 1376) event=889 script=14582 mode=2 state=2 player=(960, 880) pos=(1040, 888) path=2
+target scene=52 area=(192, 1376) event=896 script=14619 mode=2 state=2 player=(992, 864) pos=(1024, 848) path=0
+target scene=52 area=(192, 1376) event=895 script=14613 mode=2 state=2 player=(992, 864) pos=(1056, 848) path=1
+target scene=52 area=(192, 1376) event=897 script=14624 mode=2 state=2 player=(1008, 856) pos=(1104, 856) path=3
+target scene=52 area=(192, 1376) event=894 script=14608 mode=2 state=2 player=(1056, 864) pos=(1104, 888) path=0
+target scene=52 area=(192, 1376) event=892 script=14598 mode=2 state=2 player=(1056, 864) pos=(1040, 920) path=4
+target scene=52 area=(192, 1376) event=893 script=14603 mode=2 state=2 player=(1088, 896) pos=(1072, 920) path=0
+target scene=52 area=(192, 1376) event=886 script=14175 mode=5 state=1 player=(1088, 896) pos=(864, 816) path=13
+learned targeted exit AreaKey { scene: 52, anchor: (192, 1376) } event=886 -> AreaKey { scene: 53, anchor: (160, 112) }
+learned exit AreaKey { scene: 52, anchor: (192, 1376) } event=886 -> AreaKey { scene: 53, anchor: (160, 112) }
+scene 52 -> 53 at frame 454 position (1120, 768)
+target scene=53 area=(160, 112) event=923 script=14568 mode=2 state=1 player=(1280, 880) pos=(1120, 672) path=23
+target scene=53 area=(160, 112) event=922 script=15434 mode=2 state=1 player=(1168, 696) pos=(1024, 624) path=8
+target scene=53 area=(160, 112) event=921 script=15430 mode=2 state=2 player=(1072, 648) pos=(976, 632) path=3
+target scene=53 area=(160, 112) event=920 script=15450 mode=2 state=1 player=(1024, 656) pos=(1040, 568) path=12
+target scene=53 area=(160, 112) event=917 script=15441 mode=2 state=1 player=(1088, 576) pos=(1088, 544) path=1
+target scene=53 area=(160, 112) event=909 script=14575 mode=2 state=2 player=(1072, 568) pos=(1200, 568) path=5
+target scene=53 area=(160, 112) event=916 script=15438 mode=2 state=1 player=(1152, 576) pos=(1136, 520) path=4
+target scene=53 area=(160, 112) event=919 script=15447 mode=2 state=1 player=(1120, 544) pos=(1184, 496) path=9
+target scene=53 area=(160, 112) event=918 script=15444 mode=2 state=1 player=(1168, 520) pos=(1248, 480) path=8
+target scene=53 area=(160, 112) event=905 script=14861 mode=2 state=1 player=(1296, 504) pos=(1456, 584) path=47
+target scene=53 area=(160, 112) event=906 script=14558 mode=2 state=2 player=(1296, 680) pos=(1312, 704) path=0
+target scene=53 area=(160, 112) event=904 script=14179 mode=5 state=1 player=(1296, 680) pos=(1312, 896) path=25
+learned targeted exit AreaKey { scene: 53, anchor: (160, 112) } event=904 -> AreaKey { scene: 52, anchor: (192, 1376) }
+learned exit AreaKey { scene: 53, anchor: (160, 112) } event=904 -> AreaKey { scene: 52, anchor: (192, 1376) }
+scene 53 -> 52 at frame 599 position (736, 720)
+target scene=52 area=(192, 1376) event=885 script=14115 mode=5 state=1 player=(896, 832) pos=(384, 1280) path=55
+learned targeted exit AreaKey { scene: 52, anchor: (192, 1376) } event=885 -> AreaKey { scene: 49, anchor: (160, 112) }
+learned exit AreaKey { scene: 52, anchor: (192, 1376) } event=885 -> AreaKey { scene: 49, anchor: (160, 112) }
+scene 52 -> 49 at frame 654 position (1440, 608)
+target scene=49 area=(160, 112) event=830 script=14082 mode=5 state=1 player=(1600, 720) pos=(928, 832) path=63
+learned targeted exit AreaKey { scene: 49, anchor: (160, 112) } event=830 -> AreaKey { scene: 50, anchor: (160, 112) }
+learned exit AreaKey { scene: 49, anchor: (160, 112) } event=830 -> AreaKey { scene: 50, anchor: (160, 112) }
+scene 49 -> 50 at frame 717 position (656, 808)
+target scene=50 area=(160, 112) event=856 script=15343 mode=2 state=2 player=(816, 920) pos=(832, 928) path=0
+target scene=50 area=(160, 112) event=855 script=15338 mode=2 state=2 player=(816, 920) pos=(864, 912) path=0
+target scene=50 area=(160, 112) event=857 script=15347 mode=2 state=2 player=(816, 920) pos=(800, 944) path=0
+target scene=50 area=(160, 112) event=854 script=15334 mode=2 state=2 player=(816, 920) pos=(880, 904) path=1
+target scene=50 area=(160, 112) event=853 script=15329 mode=2 state=2 player=(832, 912) pos=(912, 888) path=2
+target scene=50 area=(160, 112) event=852 script=15325 mode=2 state=2 player=(864, 896) pos=(944, 888) path=2
+target scene=50 area=(160, 112) event=859 script=15355 mode=2 state=2 player=(896, 880) pos=(896, 864) path=0
+target scene=50 area=(160, 112) event=860 script=15360 mode=2 state=2 player=(896, 880) pos=(912, 872) path=0
+target scene=50 area=(160, 112) event=851 script=15320 mode=2 state=2 player=(896, 880) pos=(944, 872) path=0
+target scene=50 area=(160, 112) event=850 script=15316 mode=2 state=2 player=(896, 880) pos=(960, 864) path=5
+target scene=50 area=(160, 112) event=858 script=15351 mode=2 state=2 player=(912, 856) pos=(928, 848) path=0
+target scene=50 area=(160, 112) event=846 script=15424 mode=2 state=2 player=(912, 856) pos=(944, 824) path=1
+target scene=50 area=(160, 112) event=847 script=15424 mode=2 state=2 player=(896, 848) pos=(992, 848) path=17
+target scene=50 area=(160, 112) event=845 script=15398 mode=2 state=2 player=(1008, 824) pos=(784, 808) path=11
+target scene=50 area=(160, 112) event=849 script=15413 mode=2 state=2 player=(832, 800) pos=(816, 792) path=0
+target scene=50 area=(160, 112) event=848 script=15409 mode=2 state=2 player=(832, 800) pos=(752, 824) path=2
+target scene=50 area=(160, 112) event=844 script=14086 mode=5 state=1 player=(800, 816) pos=(768, 944) path=14
+learned targeted exit AreaKey { scene: 50, anchor: (160, 112) } event=844 -> AreaKey { scene: 49, anchor: (160, 112) }
+learned exit AreaKey { scene: 50, anchor: (160, 112) } event=844 -> AreaKey { scene: 49, anchor: (160, 112) }
+scene 50 -> 49 at frame 772 position (736, 736)
+target scene=49 area=(160, 112) event=804 script=14127 mode=5 state=1 player=(896, 848) pos=(896, 1168) path=43
+learned targeted exit AreaKey { scene: 49, anchor: (160, 112) } event=804 -> AreaKey { scene: 51, anchor: (160, 112) }
+learned exit AreaKey { scene: 49, anchor: (160, 112) } event=804 -> AreaKey { scene: 51, anchor: (160, 112) }
+scene 49 -> 51 at frame 815 position (592, 344)
+target scene=51 area=(160, 112) event=877 script=14252 mode=2 state=2 player=(752, 456) pos=(800, 336) path=12
+target scene=51 area=(160, 112) event=877 script=14257 mode=2 state=2 player=(848, 360) pos=(800, 336) path=0
+target scene=51 area=(160, 112) event=879 script=15265 mode=2 state=1 player=(848, 360) pos=(1424, 328) path=51
+learned exit AreaKey { scene: 51, anchor: (160, 112) } event=871 -> AreaKey { scene: 49, anchor: (160, 112) }
+scene 51 -> 49 at frame 841 position (768, 1072)
+target scene=49 area=(160, 112) event=801 script=14187 mode=5 state=1 player=(928, 1184) pos=(528, 1656) path=57
+learned targeted exit AreaKey { scene: 49, anchor: (160, 112) } event=801 -> AreaKey { scene: 48, anchor: (160, 112) }
+learned exit AreaKey { scene: 49, anchor: (160, 112) } event=801 -> AreaKey { scene: 48, anchor: (160, 112) }
+scene 49 -> 48 at frame 898 position (1616, 1416)
+target scene=48 area=(160, 112) event=799 script=15058 mode=2 state=2 player=(1776, 1528) pos=(1584, 1512) path=21
+target scene=48 area=(160, 112) event=799 script=15063 mode=2 state=2 player=(1568, 1536) pos=(1584, 1512) path=0
+target scene=48 area=(160, 112) event=796 script=14640 mode=3 state=2 player=(1568, 1536) pos=(704, 1424) path=115
+target scene=48 area=(160, 112) event=797 script=14774 mode=8 state=2 player=(656, 1384) pos=(1184, 560) path=143
+target scene=48 area=(160, 112) event=797 script=14777 mode=0 state=2 player=(1120, 528) pos=(1152, 528) path=1
+target scene=48 area=(160, 112) event=790 script=14183 mode=5 state=1 player=(1120, 528) pos=(1824, 1504) path=194
+learned targeted exit AreaKey { scene: 48, anchor: (160, 112) } event=790 -> AreaKey { scene: 49, anchor: (160, 112) }
+learned exit AreaKey { scene: 48, anchor: (160, 112) } event=790 -> AreaKey { scene: 49, anchor: (160, 112) }
+scene 48 -> 49 at frame 1377 position (416, 1520)
+target scene=49 area=(160, 112) event=802 script=14119 mode=6 state=1 player=(576, 1632) pos=(672, 480) path=142
+forcing unreached touch target scene=49 event=802 script=14119 player=(960, 880) pos=(672, 480)
+running forced event=802 script=14119 destination=Some(54)
+scene 49 -> 54 at frame 1524 position (896, 1680)
+target scene=54 area=(160, 112) event=926 script=14095 mode=5 state=1 player=(1056, 1792) pos=(192, 1296) path=104
+learned targeted exit AreaKey { scene: 54, anchor: (160, 112) } event=926 -> AreaKey { scene: 55, anchor: (160, 1504) }
+learned exit AreaKey { scene: 54, anchor: (160, 112) } event=926 -> AreaKey { scene: 55, anchor: (160, 1504) }
+scene 54 -> 55 at frame 1628 position (1568, 1376)
+target scene=55 area=(160, 1504) event=934 script=14644 mode=5 state=1 player=(1728, 1488) pos=(192, 1504) path=191
+forcing unreached touch target scene=55 event=934 script=14644 player=(256, 1536) pos=(192, 1504)
+running forced event=934 script=14644 destination=Some(70)
+scene 55 -> 70 at frame 1824 position (1472, 608)
+target scene=70 area=(160, 112) event=1463 script=2079 mode=1 state=2 player=(1632, 720) pos=(1328, 696) path=18
+target scene=70 area=(160, 112) event=1463 script=887 mode=1 state=2 player=(1344, 704) pos=(1328, 696) path=0
+target scene=70 area=(160, 112) event=1462 script=2109 mode=1 state=2 player=(1344, 704) pos=(480, 624) path=75
+target scene=70 area=(160, 112) event=1462 script=887 mode=1 state=2 player=(496, 632) pos=(480, 624) path=0
+target scene=70 area=(160, 112) event=1455 script=16978 mode=5 state=1 player=(496, 632) pos=(1584, 1032) path=82
+learned targeted exit AreaKey { scene: 70, anchor: (160, 112) } event=1455 -> AreaKey { scene: 68, anchor: (160, 112) }
+learned exit AreaKey { scene: 70, anchor: (160, 112) } event=1455 -> AreaKey { scene: 68, anchor: (160, 112) }
+scene 70 -> 68 at frame 1999 position (1536, 1616)
+target scene=68 area=(160, 112) event=1436 script=16944 mode=5 state=1 player=(1696, 1728) pos=(1664, 1216) path=107
+learned targeted exit AreaKey { scene: 68, anchor: (160, 112) } event=1436 -> AreaKey { scene: 72, anchor: (240, 1272) }
+learned exit AreaKey { scene: 68, anchor: (160, 112) } event=1436 -> AreaKey { scene: 72, anchor: (240, 1272) }
+scene 68 -> 72 at frame 2106 position (1408, 1600)
+target scene=72 area=(240, 1272) event=1480 script=1821 mode=1 state=2 player=(1568, 1712) pos=(912, 1320) path=60
+target scene=72 area=(240, 1272) event=1480 script=887 mode=1 state=2 player=(928, 1328) pos=(912, 1320) path=0
+target scene=72 area=(240, 1272) event=1481 script=2109 mode=1 state=2 player=(928, 1328) pos=(688, 1368) path=62
+target scene=72 area=(240, 1272) event=1481 script=887 mode=1 state=2 player=(704, 1376) pos=(688, 1368) path=0
+target scene=72 area=(240, 1272) event=1477 script=40691 mode=5 state=2 player=(704, 1376) pos=(912, 1416) path=50
+target scene=72 area=(240, 1272) event=1478 script=40689 mode=5 state=2 player=(928, 1424) pos=(416, 1200) path=31
+target scene=72 area=(240, 1272) event=1474 script=16998 mode=5 state=1 player=(432, 1192) pos=(384, 1328) path=16
+learned targeted exit AreaKey { scene: 72, anchor: (240, 1272) } event=1474 -> AreaKey { scene: 68, anchor: (928, 656) }
+learned exit AreaKey { scene: 72, anchor: (240, 1272) } event=1474 -> AreaKey { scene: 68, anchor: (928, 656) }
+scene 72 -> 68 at frame 2335 position (832, 560)
+target scene=68 area=(928, 656) event=1437 script=16948 mode=5 state=1 player=(992, 672) pos=(944, 648) path=2
+learned targeted exit AreaKey { scene: 68, anchor: (928, 656) } event=1437 -> AreaKey { scene: 72, anchor: (240, 1272) }
+learned exit AreaKey { scene: 68, anchor: (928, 656) } event=1437 -> AreaKey { scene: 72, anchor: (240, 1272) }
+scene 68 -> 72 at frame 2337 position (176, 1192)
+target scene=72 area=(240, 1272) event=1473 script=16994 mode=5 state=1 player=(336, 1304) pos=(1616, 1736) path=94
+learned targeted exit AreaKey { scene: 72, anchor: (240, 1272) } event=1473 -> AreaKey { scene: 68, anchor: (160, 112) }
+learned exit AreaKey { scene: 72, anchor: (240, 1272) } event=1473 -> AreaKey { scene: 68, anchor: (160, 112) }
+scene 72 -> 68 at frame 2431 position (1552, 1128)
+target scene=68 area=(160, 112) event=1434 script=16936 mode=5 state=1 player=(1712, 1240) pos=(1360, 1144) path=33
+learned targeted exit AreaKey { scene: 68, anchor: (160, 112) } event=1434 -> AreaKey { scene: 71, anchor: (416, 688) }
+learned exit AreaKey { scene: 68, anchor: (160, 112) } event=1434 -> AreaKey { scene: 71, anchor: (416, 688) }
+scene 68 -> 71 at frame 2464 position (960, 944)
+target scene=71 area=(416, 688) event=1471 script=2079 mode=1 state=2 player=(1120, 1056) pos=(928, 1024) path=11
+target scene=71 area=(416, 688) event=1471 script=887 mode=1 state=2 player=(944, 1016) pos=(928, 1024) path=0
+target scene=71 area=(416, 688) event=1472 script=2253 mode=1 state=2 player=(944, 1016) pos=(1184, 656) path=88
+target scene=71 area=(416, 688) event=1472 script=887 mode=1 state=2 player=(1168, 648) pos=(1184, 656) path=0
+target scene=71 area=(416, 688) event=1470 script=40689 mode=5 state=2 player=(1168, 648) pos=(576, 832) path=46
+target scene=71 area=(416, 688) event=1464 script=16986 mode=5 state=1 player=(592, 824) pos=(1168, 1080) path=87
+learned targeted exit AreaKey { scene: 71, anchor: (416, 688) } event=1464 -> AreaKey { scene: 68, anchor: (160, 112) }
+learned exit AreaKey { scene: 71, anchor: (416, 688) } event=1464 -> AreaKey { scene: 68, anchor: (160, 112) }
+scene 71 -> 68 at frame 2701 position (1248, 1056)
+target scene=68 area=(160, 112) event=1440 script=16952 mode=5 state=1 player=(1408, 1168) pos=(1328, 904) path=44
+learned targeted exit AreaKey { scene: 68, anchor: (160, 112) } event=1440 -> AreaKey { scene: 74, anchor: (320, 1136) }
+learned exit AreaKey { scene: 68, anchor: (160, 112) } event=1440 -> AreaKey { scene: 74, anchor: (320, 1136) }
+scene 68 -> 74 at frame 2745 position (464, 1480)
+target scene=74 area=(320, 1136) event=1491 script=2271 mode=1 state=2 player=(624, 1592) pos=(1152, 1120) path=90
+target scene=74 area=(320, 1136) event=1491 script=887 mode=1 state=2 player=(1168, 1128) pos=(1152, 1120) path=0
+target scene=74 area=(320, 1136) event=1490 script=17014 mode=5 state=1 player=(1168, 1128) pos=(464, 1192) path=85
+learned targeted exit AreaKey { scene: 74, anchor: (320, 1136) } event=1490 -> AreaKey { scene: 68, anchor: (560, 1064) }
+learned exit AreaKey { scene: 74, anchor: (320, 1136) } event=1490 -> AreaKey { scene: 68, anchor: (560, 1064) }
+scene 74 -> 68 at frame 2920 position (736, 784)
+target scene=68 area=(560, 1064) event=1438 script=16960 mode=5 state=1 player=(896, 896) pos=(576, 1056) path=33
+learned targeted exit AreaKey { scene: 68, anchor: (560, 1064) } event=1438 -> AreaKey { scene: 73, anchor: (304, 1016) }
+learned exit AreaKey { scene: 68, anchor: (560, 1064) } event=1438 -> AreaKey { scene: 73, anchor: (304, 1016) }
+scene 68 -> 73 at frame 2953 position (1008, 1080)
+target scene=73 area=(304, 1016) event=1488 script=2253 mode=1 state=2 player=(1168, 1192) pos=(736, 800) path=78
+target scene=73 area=(304, 1016) event=1488 script=887 mode=1 state=2 player=(752, 808) pos=(736, 800) path=0
+target scene=73 area=(304, 1016) event=1487 script=40167 mode=5 state=2 player=(752, 808) pos=(788, 854) path=4
+target scene=73 area=(304, 1016) event=1485 script=40691 mode=5 state=2 player=(784, 840) pos=(1120, 752) path=20
+target scene=73 area=(304, 1016) event=1486 script=40689 mode=5 state=2 player=(1104, 744) pos=(384, 976) path=60
+target scene=73 area=(304, 1016) event=1483 script=17006 mode=5 state=1 player=(368, 984) pos=(1264, 808) path=68
+learned targeted exit AreaKey { scene: 73, anchor: (304, 1016) } event=1483 -> AreaKey { scene: 68, anchor: (160, 112) }
+learned exit AreaKey { scene: 73, anchor: (304, 1016) } event=1483 -> AreaKey { scene: 68, anchor: (160, 112) }
+scene 73 -> 68 at frame 3198 position (208, 712)
+target scene=68 area=(160, 112) event=1443 script=16972 mode=5 state=1 player=(368, 824) pos=(560, 520) path=38
+learned targeted exit AreaKey { scene: 68, anchor: (160, 112) } event=1443 -> AreaKey { scene: 69, anchor: (160, 112) }
+learned exit AreaKey { scene: 68, anchor: (160, 112) } event=1443 -> AreaKey { scene: 69, anchor: (160, 112) }
+scene 68 -> 69 at frame 3236 position (400, 1736)
+target scene=69 area=(160, 112) event=1452 script=2469 mode=1 state=1 player=(560, 1848) pos=(880, 1624) path=27
+target scene=69 area=(160, 112) event=1453 script=2476 mode=1 state=1 player=(896, 1632) pos=(912, 1352) path=102
+target scene=69 area=(160, 112) event=1451 script=2469 mode=1 state=1 player=(928, 1360) pos=(1776, 1480) path=60
+target scene=69 area=(160, 112) event=1454 script=2469 mode=1 state=1 player=(1760, 1472) pos=(1232, 904) path=98
+target scene=69 area=(160, 112) event=1447 script=17022 mode=5 state=1 player=(1248, 912) pos=(1424, 808) path=11
+learned targeted exit AreaKey { scene: 69, anchor: (160, 112) } event=1447 -> AreaKey { scene: 76, anchor: (160, 112) }
+learned exit AreaKey { scene: 69, anchor: (160, 112) } event=1447 -> AreaKey { scene: 76, anchor: (160, 112) }
+scene 69 -> 76 at frame 3534 position (816, 1768)
+target scene=76 area=(160, 112) event=1556 script=1869 mode=1 state=2 player=(976, 1880) pos=(1088, 1088) path=136
+learned exit AreaKey { scene: 76, anchor: (160, 112) } event=1501 -> AreaKey { scene: 69, anchor: (160, 112) }
+scene 76 -> 69 at frame 3537 position (1184, 736)
+target scene=69 area=(160, 112) event=1448 script=17026 mode=5 state=1 player=(1344, 848) pos=(1232, 712) path=15
+learned targeted exit AreaKey { scene: 69, anchor: (160, 112) } event=1448 -> AreaKey { scene: 76, anchor: (160, 112) }
+learned exit AreaKey { scene: 69, anchor: (160, 112) } event=1448 -> AreaKey { scene: 76, anchor: (160, 112) }
+scene 69 -> 76 at frame 3552 position (608, 1664)
+target scene=76 area=(160, 112) event=1556 script=1869 mode=1 state=2 player=(768, 1776) pos=(1088, 1088) path=115
+target scene=76 area=(160, 112) event=1556 script=887 mode=1 state=2 player=(1072, 1080) pos=(1088, 1088) path=0
+target scene=76 area=(160, 112) event=1561 script=1299 mode=3 state=1 player=(1072, 1080) pos=(1152, 1104) path=0
+target scene=76 area=(160, 112) event=1555 script=1839 mode=1 state=2 player=(1072, 1080) pos=(1152, 960) path=30
+target scene=76 area=(160, 112) event=1555 script=887 mode=1 state=2 player=(1168, 968) pos=(1152, 960) path=0
+target scene=76 area=(160, 112) event=1557 script=2067 mode=1 state=2 player=(1168, 968) pos=(1664, 1040) path=92
+target scene=76 area=(160, 112) event=1557 script=887 mode=1 state=2 player=(1648, 1032) pos=(1664, 1040) path=0
+target scene=76 area=(160, 112) event=1558 script=2109 mode=1 state=2 player=(1648, 1032) pos=(1696, 1024) path=2
+target scene=76 area=(160, 112) event=1558 script=887 mode=1 state=2 player=(1680, 1016) pos=(1696, 1024) path=0
+target scene=76 area=(160, 112) event=1553 script=1515 mode=2 state=2 player=(1680, 1016) pos=(1584, 1256) path=191
+target scene=76 area=(160, 112) event=1553 script=887 mode=2 state=2 player=(1568, 1136) pos=(1584, 1256) path=160
+target scene=76 area=(160, 112) event=1554 script=1575 mode=1 state=2 player=(1536, 1280) pos=(336, 1128) path=92
+target scene=76 area=(160, 112) event=1554 script=887 mode=1 state=2 player=(352, 1136) pos=(336, 1128) path=0
+target scene=76 area=(160, 112) event=1560 script=1869 mode=1 state=2 player=(352, 1136) pos=(544, 496) path=287
+target scene=76 area=(160, 112) event=1560 script=887 mode=1 state=2 player=(560, 504) pos=(544, 496) path=0
+target scene=76 area=(160, 112) event=1559 script=2271 mode=1 state=2 player=(560, 504) pos=(1760, 624) path=144
+target scene=76 area=(160, 112) event=1559 script=887 mode=1 state=2 player=(1744, 616) pos=(1760, 624) path=0
+target scene=76 area=(160, 112) event=1503 script=17038 mode=5 state=1 player=(1744, 616) pos=(416, 496) path=142
+learned targeted exit AreaKey { scene: 76, anchor: (160, 112) } event=1503 -> AreaKey { scene: 67, anchor: (160, 112) }
+learned exit AreaKey { scene: 76, anchor: (160, 112) } event=1503 -> AreaKey { scene: 67, anchor: (160, 112) }
+scene 76 -> 67 at frame 4807 position (656, 1592)
+target scene=67 area=(160, 112) event=1412 script=17224 mode=1 state=2 player=(816, 1704) pos=(1168, 904) path=99
+target scene=67 area=(160, 112) event=1413 script=17224 mode=1 state=2 player=(1152, 912) pos=(1152, 896) path=1
+target scene=67 area=(160, 112) event=1414 script=17062 mode=7 state=1 player=(1136, 904) pos=(1344, 1040) path=14
+learned targeted exit AreaKey { scene: 67, anchor: (160, 112) } event=1414 -> AreaKey { scene: 77, anchor: (432, 1528) }
+learned exit AreaKey { scene: 67, anchor: (160, 112) } event=1414 -> AreaKey { scene: 77, anchor: (432, 1528) }
+scene 67 -> 77 at frame 4976 position (1072, 872)
+target scene=77 area=(432, 1528) event=1562 script=17046 mode=5 state=1 player=(1232, 984) pos=(1184, 880) path=11
+learned targeted exit AreaKey { scene: 77, anchor: (432, 1528) } event=1562 -> AreaKey { scene: 78, anchor: (160, 112) }
+learned exit AreaKey { scene: 77, anchor: (432, 1528) } event=1562 -> AreaKey { scene: 78, anchor: (160, 112) }
+scene 77 -> 78 at frame 5033 position (256, 944)
+target scene=78 area=(160, 112) event=1572 script=17054 mode=5 state=1 player=(416, 1056) pos=(1104, 1320) path=43
+learned targeted exit AreaKey { scene: 78, anchor: (160, 112) } event=1572 -> AreaKey { scene: 80, anchor: (160, 112) }
+learned exit AreaKey { scene: 78, anchor: (160, 112) } event=1572 -> AreaKey { scene: 80, anchor: (160, 112) }
+scene 78 -> 80 at frame 5076 position (128, 336)
+target scene=80 area=(160, 112) event=1591 script=2469 mode=1 state=1 player=(288, 448) pos=(384, 464) path=5
+target scene=80 area=(160, 112) event=1592 script=2476 mode=1 state=1 player=(368, 456) pos=(1120, 976) path=78
+target scene=80 area=(160, 112) event=1582 script=17358 mode=5 state=1 player=(1104, 984) pos=(1728, 1136) path=152
+learned targeted exit AreaKey { scene: 80, anchor: (160, 112) } event=1582 -> AreaKey { scene: 83, anchor: (160, 112) }
+learned exit AreaKey { scene: 80, anchor: (160, 112) } event=1582 -> AreaKey { scene: 83, anchor: (160, 112) }
+scene 80 -> 83 at frame 5311 position (64, 736)
+target scene=83 area=(160, 112) event=1648 script=19441 mode=2 state=2 player=(224, 848) pos=(1344, 720) path=217
+target scene=83 area=(160, 112) event=1648 script=19455 mode=2 state=2 player=(1392, 744) pos=(1344, 720) path=0
+target scene=83 area=(160, 112) event=1647 script=17366 mode=5 state=1 player=(1392, 744) pos=(1760, 720) path=76
+learned targeted exit AreaKey { scene: 83, anchor: (160, 112) } event=1647 -> AreaKey { scene: 79, anchor: (160, 112) }
+learned exit AreaKey { scene: 83, anchor: (160, 112) } event=1647 -> AreaKey { scene: 79, anchor: (160, 112) }
+scene 83 -> 79 at frame 5604 position (256, 1344)
+target scene=79 area=(160, 112) event=1578 script=17635 mode=2 state=2 player=(416, 1456) pos=(448, 1216) path=27
+target scene=79 area=(160, 112) event=1580 script=19517 mode=2 state=2 player=(496, 1240) pos=(624, 1256) path=5
+target scene=79 area=(160, 112) event=1579 script=18553 mode=2 state=1 player=(576, 1232) pos=(656, 1256) path=2
+target scene=79 area=(160, 112) event=1577 script=17631 mode=2 state=2 player=(608, 1248) pos=(384, 1184) path=13
+target scene=79 area=(160, 112) event=1576 script=17638 mode=5 state=2 player=(432, 1208) pos=(432, 1192) path=0
+learned targeted exit AreaKey { scene: 79, anchor: (160, 112) } event=1576 -> AreaKey { scene: 82, anchor: (160, 112) }
+learned exit AreaKey { scene: 79, anchor: (160, 112) } event=1576 -> AreaKey { scene: 82, anchor: (160, 112) }
+scene 79 -> 82 at frame 5670 position (320, 1056)
+target scene=82 area=(160, 112) event=1644 script=17864 mode=2 state=2 player=(480, 1168) pos=(560, 1032) path=14
+target scene=82 area=(160, 112) event=1645 script=17872 mode=2 state=2 player=(608, 1056) pos=(608, 1040) path=0
+target scene=82 area=(160, 112) event=1645 script=17872 mode=0 state=2 player=(608, 1056) pos=(608, 1040) path=1
+target scene=82 area=(160, 112) event=1644 script=17864 mode=0 state=2 player=(624, 1048) pos=(560, 1032) path=3
+target scene=82 area=(160, 112) event=1639 script=19523 mode=2 state=1 player=(576, 1040) pos=(656, 984) path=6
+directing unreachable manual event=1629 script=19534 mode=2 state=2
+target scene=82 area=(160, 112) event=1629 script=19534 mode=2 state=2 player=(672, 1008) pos=(916, 1142) path=0
+directing unreachable manual event=1630 script=19534 mode=2 state=2
+target scene=82 area=(160, 112) event=1630 script=19534 mode=2 state=2 player=(672, 1008) pos=(920, 1164) path=0
+target scene=82 area=(160, 112) event=1632 script=19557 mode=2 state=2 player=(672, 1008) pos=(992, 784) path=25
+target scene=82 area=(160, 112) event=1638 script=18558 mode=2 state=1 player=(1040, 808) pos=(1024, 768) path=2
+target scene=82 area=(160, 112) event=1633 script=19562 mode=2 state=2 player=(1072, 792) pos=(960, 768) path=4
+target scene=82 area=(160, 112) event=1640 script=19528 mode=2 state=1 player=(1008, 792) pos=(1376, 624) path=24
+target scene=82 area=(160, 112) event=1631 script=19611 mode=2 state=2 player=(1392, 648) pos=(1344, 448) path=24
+target scene=82 area=(160, 112) event=1635 script=19549 mode=2 state=2 player=(1360, 472) pos=(1600, 1248) path=124
+learned exit AreaKey { scene: 82, anchor: (160, 112) } event=1621 -> AreaKey { scene: 84, anchor: (160, 112) }
+scene 82 -> 84 at frame 5796 position (48, 264)
+target scene=84 area=(160, 112) event=1688 script=18570 mode=2 state=1 player=(208, 376) pos=(240, 1000) path=127
+target scene=84 area=(160, 112) event=1681 script=19622 mode=2 state=2 player=(288, 1024) pos=(240, 1096) path=6
+directing unreachable manual event=1682 script=19615 mode=2 state=2
+target scene=84 area=(160, 112) event=1682 script=19615 mode=2 state=2 player=(288, 1072) pos=(264, 1108) path=0
+target scene=84 area=(160, 112) event=1678 script=19628 mode=2 state=2 player=(288, 1072) pos=(432, 1144) path=6
+target scene=84 area=(160, 112) event=1679 script=19634 mode=2 state=2 player=(384, 1120) pos=(448, 1152) path=1
+target scene=84 area=(160, 112) event=1687 script=18576 mode=2 state=1 player=(400, 1128) pos=(480, 1136) path=2
+target scene=84 area=(160, 112) event=1680 script=19618 mode=2 state=2 player=(432, 1112) pos=(480, 1168) path=4
+target scene=84 area=(160, 112) event=1667 script=18616 mode=2 state=2 player=(464, 1144) pos=(496, 904) path=27
+target scene=84 area=(160, 112) event=1668 script=18616 mode=2 state=2 player=(544, 928) pos=(576, 944) path=0
+target scene=84 area=(160, 112) event=1659 script=19681 mode=2 state=2 player=(544, 928) pos=(1392, 952) path=62
+target scene=84 area=(160, 112) event=1660 script=19684 mode=2 state=2 player=(1344, 928) pos=(1376, 960) path=1
+target scene=84 area=(160, 112) event=1662 script=19687 mode=2 state=2 player=(1360, 936) pos=(1616, 1000) path=13
+directing unreachable manual event=1661 script=19687 mode=2 state=2
+target scene=84 area=(160, 112) event=1661 script=19687 mode=2 state=2 player=(1376, 944) pos=(1692, 1006) path=0
+target scene=84 area=(160, 112) event=1663 script=19687 mode=2 state=2 player=(1376, 944) pos=(1696, 1040) path=17
+target scene=84 area=(160, 112) event=1677 script=19678 mode=2 state=2 player=(1376, 944) pos=(1312, 656) path=33
+target scene=84 area=(160, 112) event=1675 script=19669 mode=2 state=2 player=(1328, 680) pos=(1296, 648) path=1
+target scene=84 area=(160, 112) event=1676 script=19674 mode=2 state=2 player=(1312, 672) pos=(1280, 640) path=1
+target scene=84 area=(160, 112) event=1665 script=19643 mode=2 state=2 player=(1296, 664) pos=(896, 1264) path=104
+target scene=84 area=(160, 112) event=1664 script=19639 mode=2 state=2 player=(832, 1168) pos=(912, 1288) path=56
+target scene=84 area=(160, 112) event=1666 script=19648 mode=2 state=2 player=(736, 1088) pos=(1072, 1352) path=58
+target scene=84 area=(160, 112) event=1689 script=18564 mode=2 state=1 player=(1024, 1328) pos=(1472, 1488) path=37
+target scene=84 area=(160, 112) event=1653 script=17429 mode=5 state=1 player=(1424, 1480) pos=(1744, 984) path=144
+forcing unreached touch target scene=84 event=1653 script=17429 player=(1376, 944) pos=(1744, 984)
+running forced event=1653 script=17429 destination=Some(88)
+scene 84 -> 88 at frame 6501 position (304, 1704)
+target scene=88 area=(160, 112) event=1723 script=17603 mode=5 state=1 player=(464, 1816) pos=(416, 1584) path=38
+learned targeted exit AreaKey { scene: 88, anchor: (160, 112) } event=1723 -> AreaKey { scene: 91, anchor: (160, 112) }
+learned exit AreaKey { scene: 88, anchor: (160, 112) } event=1723 -> AreaKey { scene: 91, anchor: (160, 112) }
+scene 88 -> 91 at frame 6543 position (896, 1152)
+target scene=91 area=(160, 112) event=1762 script=19835 mode=2 state=1 player=(1056, 1264) pos=(1072, 1480) path=60
+learned exit AreaKey { scene: 91, anchor: (160, 112) } event=1741 -> AreaKey { scene: 88, anchor: (160, 112) }
+scene 91 -> 88 at frame 6548 position (288, 1456)
+target scene=88 area=(160, 112) event=1722 script=17499 mode=5 state=1 player=(448, 1568) pos=(416, 1840) path=38
+learned targeted exit AreaKey { scene: 88, anchor: (160, 112) } event=1722 -> AreaKey { scene: 84, anchor: (160, 112) }
+learned exit AreaKey { scene: 88, anchor: (160, 112) } event=1722 -> AreaKey { scene: 84, anchor: (160, 112) }
+scene 88 -> 84 at frame 6586 position (1504, 912)
+target scene=84 area=(160, 112) event=1655 script=17351 mode=5 state=1 player=(1664, 1024) pos=(1568, 704) path=65
+forcing unreached touch target scene=84 event=1655 script=17351 player=(1520, 904) pos=(1568, 704)
+running forced event=1655 script=17351 destination=Some(86)
+scene 84 -> 86 at frame 6664 position (1296, 728)
+target scene=86 area=(160, 336) event=1700 script=17583 mode=5 state=1 player=(1456, 840) pos=(320, 240) path=127
+learned exit AreaKey { scene: 86, anchor: (160, 336) } event=1701 -> AreaKey { scene: 84, anchor: (160, 112) }
+scene 86 -> 84 at frame 6694 position (1488, 616)
+target scene=84 area=(160, 112) event=1658 script=19868 mode=5 state=1 player=(1648, 728) pos=(1824, 384) path=125
+learned exit AreaKey { scene: 84, anchor: (160, 112) } event=1654 -> AreaKey { scene: 89, anchor: (672, 1152) }
+scene 84 -> 89 at frame 6754 position (656, 1112)
+target scene=89 area=(672, 1152) event=1725 script=18290 mode=2 state=2 player=(816, 1224) pos=(1056, 1104) path=12
+target scene=89 area=(672, 1152) event=1736 script=19040 mode=4 state=1 player=(1008, 1128) pos=(1056, 1104) path=3
+forcing unreached touch target scene=89 event=1736 script=19040 player=(1040, 1112) pos=(1056, 1104)
+running forced event=1736 script=19040 destination=Some(90)
+learned exit AreaKey { scene: 89, anchor: (672, 1152) } event=1736 -> AreaKey { scene: 90, anchor: (672, 1152) }
+scene 89 -> 90 at frame 6774 position (880, 1000)
+target scene=90 area=(672, 1152) event=1739 script=19055 mode=5 state=1 player=(1040, 1112) pos=(960, 1008) path=11
+learned targeted exit AreaKey { scene: 90, anchor: (672, 1152) } event=1739 -> AreaKey { scene: 92, anchor: (416, 1312) }
+learned exit AreaKey { scene: 90, anchor: (672, 1152) } event=1739 -> AreaKey { scene: 92, anchor: (416, 1312) }
+scene 90 -> 92 at frame 6785 position (352, 1248)
+directing unreachable manual event=1772 script=1533 mode=1 state=2
+target scene=92 area=(416, 1312) event=1772 script=1533 mode=1 state=2 player=(512, 1360) pos=(672, 1536) path=0
+directing unreachable manual event=1772 script=887 mode=1 state=2
+target scene=92 area=(416, 1312) event=1772 script=887 mode=1 state=2 player=(512, 1360) pos=(672, 1536) path=0
+directing unreachable manual event=1773 script=1527 mode=1 state=2
+target scene=92 area=(416, 1312) event=1773 script=1527 mode=1 state=2 player=(512, 1360) pos=(640, 1552) path=0
+directing unreachable manual event=1773 script=887 mode=1 state=2
+target scene=92 area=(416, 1312) event=1773 script=887 mode=1 state=2 player=(512, 1360) pos=(640, 1552) path=0
+directing unreachable manual event=1774 script=2361 mode=1 state=2
+target scene=92 area=(416, 1312) event=1774 script=2361 mode=1 state=2 player=(512, 1360) pos=(608, 1568) path=0
+directing unreachable manual event=1774 script=887 mode=1 state=2
+target scene=92 area=(416, 1312) event=1774 script=887 mode=1 state=2 player=(512, 1360) pos=(608, 1568) path=0
+directing unreachable manual event=1776 script=2085 mode=1 state=2
+target scene=92 area=(416, 1312) event=1776 script=2085 mode=1 state=2 player=(512, 1360) pos=(816, 1528) path=0
+directing unreachable manual event=1776 script=887 mode=1 state=2
+target scene=92 area=(416, 1312) event=1776 script=887 mode=1 state=2 player=(512, 1360) pos=(816, 1528) path=0
+directing unreachable manual event=1780 script=1899 mode=1 state=2
+target scene=92 area=(416, 1312) event=1780 script=1899 mode=1 state=2 player=(512, 1360) pos=(512, 1680) path=0
+directing unreachable manual event=1780 script=887 mode=1 state=2
+target scene=92 area=(416, 1312) event=1780 script=887 mode=1 state=2 player=(512, 1360) pos=(512, 1680) path=0
+directing unreachable manual event=1781 script=1953 mode=1 state=2
+target scene=92 area=(416, 1312) event=1781 script=1953 mode=1 state=2 player=(512, 1360) pos=(544, 1664) path=0
+directing unreachable manual event=1781 script=887 mode=1 state=2
+target scene=92 area=(416, 1312) event=1781 script=887 mode=1 state=2 player=(512, 1360) pos=(544, 1664) path=0
+directing unreachable manual event=1782 script=1701 mode=1 state=2
+target scene=92 area=(416, 1312) event=1782 script=1701 mode=1 state=2 player=(512, 1360) pos=(592, 1640) path=0
+directing unreachable manual event=1782 script=887 mode=1 state=2
+target scene=92 area=(416, 1312) event=1782 script=887 mode=1 state=2 player=(512, 1360) pos=(592, 1640) path=0
+directing unreachable manual event=1766 script=18726 mode=1 state=1
+target scene=92 area=(416, 1312) event=1766 script=18726 mode=1 state=1 player=(512, 1360) pos=(848, 1528) path=0
+scene 92 -> 84 at frame 6785 position (352, 1248)
+target scene=84 area=(160, 112) event=1674 script=19439 mode=2 state=1 player=(512, 1360) pos=(496, 296) path=246
+scene 84 -> 81 at frame 6794 position (384, 176)
+target scene=81 area=(160, 112) event=1598 script=19699 mode=2 state=2 player=(544, 288) pos=(1472, 976) path=83
