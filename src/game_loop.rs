@@ -574,6 +574,15 @@ pub struct Engine {
     /// tick at which the pilot may press.  `None` in normal play.
     pub demo_pilot: Option<u64>,
 
+    /// Synthetic keyboard: called from `process_event` just before the key
+    /// state is polled, i.e. wherever the engine would read the real keyboard
+    /// (frame waits, dialog waits, menus, battle).  It stands in for the
+    /// player's hands — it presses and releases keys through
+    /// `input.handle_key_event` and the engine cannot tell the difference.
+    /// `None` in normal play; the autoplay recorder installs one.
+    #[allow(clippy::type_complexity)]
+    pub autopilot: Option<Box<dyn FnMut(&mut Engine)>>,
+
     // Per-module state (owned by the respective module files).
     pub script: crate::script::ScriptState,
     pub ui: crate::ui::UiState,
@@ -634,6 +643,7 @@ impl Engine {
             battle_instant: false,
             frame_sink: None,
             demo_pilot: None,
+            autopilot: None,
             script: Default::default(),
             ui: Default::default(),
             scene: Default::default(),
@@ -661,12 +671,20 @@ impl Engine {
                 self.quit_requested = true;
             }
         }
-        // Keep the web audio ring topped up (no-op natively: cpal renders
-        // in its own callback thread).
-        if let Some(audio) = self.audio.as_ref() {
-            audio.pump();
-        }
+        // Keep the web audio ring topped up (no-op natively when cpal renders
+        // in its own callback thread; the offline mixer renders up to `now`).
         let now = self.ticks();
+        if let Some(audio) = self.audio.as_ref() {
+            audio.pump(now);
+        }
+        // Let the synthetic keyboard press/release before the poll below, so a
+        // pilot press is seen by the very wait loop that pumped this event.
+        if let Some(mut pilot) = self.autopilot.take() {
+            pilot(self);
+            if self.autopilot.is_none() {
+                self.autopilot = Some(pilot);
+            }
+        }
         self.input.update_keyboard_state(now);
     }
 
