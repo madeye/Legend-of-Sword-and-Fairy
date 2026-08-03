@@ -1276,17 +1276,6 @@ fn battle_main(engine: &mut Engine, battle: &mut Battle) -> BattleResult {
         battle.battle_result = BattleResult::OnGoing;
     }
 
-    if engine.battle_force_win && battle.battle_result == BattleResult::OnGoing {
-        // Preserve enemy loading and the normal victory path so experience,
-        // item drops, and post-battle scripts still execute. Only replace the
-        // combat resolution itself with a deterministic clear.
-        for enemy in &mut battle.enemy[..=battle.max_enemy_index as usize] {
-            enemy.e.health = 0;
-        }
-        crate::fight::battle_post_action_check(engine, battle, false);
-        battle.battle_result = BattleResult::Won;
-    }
-
     let mut time = engine.ticks();
     engine.input.clear_key_state();
 

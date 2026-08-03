@@ -2493,7 +2493,7 @@ impl Engine {
                 0x0007 => {
                     let result = self.start_battle(op[0], op[2] == 0);
                     use crate::battle::BattleResult;
-                    if result == BattleResult::Lost && op[1] != 0 && !self.battle_force_win {
+                    if result == BattleResult::Lost && op[1] != 0 {
                         script_entry = op[1];
                     } else if result == BattleResult::Fleed && op[2] != 0 {
                         script_entry = op[2];

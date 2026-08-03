@@ -560,9 +560,6 @@ pub struct Engine {
     /// the `instant` fast path — all game logic runs, rendering/waiting is
     /// skipped.  Off in normal play; tests set it to fight real battles fast.
     pub battle_instant: bool,
-    /// Route-probe override: treat a simulated battle loss as a win when the
-    /// caller needs deterministic story progression.
-    pub battle_force_win: bool,
 
     /// Optional per-present capture hook (headless recording tools).  Called
     /// on every presented frame with the 320×200 RGBA image (shake applied,
@@ -635,7 +632,6 @@ impl Engine {
             ending_effect_sprite: 0,
             battle: None,
             battle_instant: false,
-            battle_force_win: false,
             frame_sink: None,
             demo_pilot: None,
             script: Default::default(),

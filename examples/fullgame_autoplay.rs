@@ -1598,7 +1598,6 @@ fn main() {
         engine.globals.reload_in_next_tick(0);
     }
     engine.battle_instant = true;
-    engine.battle_force_win = true;
 
     let flags = engine
         .res
