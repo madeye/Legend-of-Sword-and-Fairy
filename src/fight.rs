@@ -287,7 +287,11 @@ fn battle_display_stat_change(engine: &mut Engine, battle: &mut Battle) -> bool 
 // ===========================================================================
 
 /// PAL_BattlePostActionCheck.
-fn battle_post_action_check(engine: &mut Engine, battle: &mut Battle, check_players: bool) {
+pub(crate) fn battle_post_action_check(
+    engine: &mut Engine,
+    battle: &mut Battle,
+    check_players: bool,
+) {
     let mut fade = false;
     let mut enemy_remaining = false;
 

@@ -360,6 +360,12 @@ impl Engine {
 
     /// PAL_ConfirmMenu.
     pub fn confirm_menu(&mut self) -> bool {
+        // Headless automation must affirm explicit confirmation prompts.
+        // Selecting the menu's normal default ("No") can make story scripts
+        // that repeat the question on refusal loop forever.
+        if self.ui.auto_confirm {
+            return true;
+        }
         let items = [CONFIRMMENU_LABEL_NO, CONFIRMMENU_LABEL_YES];
         let r = self.selection_menu(2, 0, &items);
         !(r == MENUITEM_VALUE_CANCELLED || r == 0)

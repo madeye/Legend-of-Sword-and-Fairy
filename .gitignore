@@ -1,5 +1,8 @@
 stderr.txt
 stdout.txt
+.DS_Store
+recordings/*.mp4
+recordings/parts/
 reference/
 /target/
 /web/pkg/

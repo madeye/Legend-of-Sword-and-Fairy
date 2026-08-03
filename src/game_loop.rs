@@ -537,6 +537,10 @@ pub struct Engine {
     pub input: InputState,
     video: Option<Video>,
     start: Instant,
+    /// Multiplier for the monotonic game clock. This is configurable only for
+    /// headless tools so probes can run faster while retaining game-time
+    /// timestamps for captured frames.
+    tick_scale: u64,
 
     /// Set when the user asked to quit (window close / Alt+F4).
     pub quit_requested: bool,
@@ -602,6 +606,15 @@ impl Engine {
         } else {
             crate::audio::Mixer::new()
         };
+        let tick_scale = if headless {
+            std::env::var("RUSTPAL_HEADLESS_TIME_SCALE")
+                .ok()
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|&value| value > 0)
+                .unwrap_or(1)
+        } else {
+            1
+        };
 
         let mut engine = Engine {
             globals,
@@ -623,6 +636,7 @@ impl Engine {
             input: InputState::new(),
             video,
             start: Instant::now(),
+            tick_scale,
             quit_requested: false,
             ending_effect_sprite: 0,
             battle: None,
@@ -644,7 +658,7 @@ impl Engine {
 
     /// Milliseconds since engine start (SDL_GetTicks equivalent).
     pub fn ticks(&self) -> u64 {
-        self.start.elapsed().as_millis() as u64
+        (self.start.elapsed().as_millis() as u64).saturating_mul(self.tick_scale)
     }
 
     /// PAL_ProcessEvent: pump window events and update the input state.

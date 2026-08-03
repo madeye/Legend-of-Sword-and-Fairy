@@ -21,6 +21,12 @@ Set `RUSTPAL_DISABLE_GPU_UPSCALE=1` to use nearest-neighbor scaling.
 
 ![](./screenshots/battle-demo.gif)
 
+#### 全程自动通关录像 / Full Autoplay Run
+
+基于本地控制 API 无窗口自动通关全程（约 2 小时 20 分，YouTube）：
+
+[![全程自动通关录像 / Full Autoplay Run](./screenshots/splash.png)](https://youtu.be/lmwd884apCQ)
+
 #### 自动游玩录制 / Autoplay recording
 
 `examples/autoplay.rs` 让引擎自己玩并录成 1280×800 的视频（经神经网络放大，

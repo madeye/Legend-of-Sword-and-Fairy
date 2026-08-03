@@ -1058,17 +1058,22 @@ fn battle_won(engine: &mut Engine, battle: &mut Battle) {
         orig_player_roles = engine.globals.game.player_roles;
 
         // Learn all magics for the current level.
-        let mut j = 0;
-        while j < engine.globals.game.level_up_magics.len() {
-            let (mlevel, magic) = engine.globals.game.level_up_magics[j].m[w];
-            if magic == 0 || mlevel > engine.globals.game.player_roles.level[w] {
+        // The data file only contains level-up magic tables for the five
+        // playable roles. Plot-controlled guest role 5 can temporarily join
+        // the party and still receives EXP, but has no entry in that table.
+        if w < MAX_PLAYABLE_PLAYER_ROLES {
+            let mut j = 0;
+            while j < engine.globals.game.level_up_magics.len() {
+                let (mlevel, magic) = engine.globals.game.level_up_magics[j].m[w];
+                if magic == 0 || mlevel > engine.globals.game.player_roles.level[w] {
+                    j += 1;
+                    continue;
+                }
+                if engine.globals.add_magic(w, magic) && !battle.instant {
+                    wait_for_any_key(engine, battle, 3000);
+                }
                 j += 1;
-                continue;
             }
-            if engine.globals.add_magic(w, magic) && !battle.instant {
-                wait_for_any_key(engine, battle, 3000);
-            }
-            j += 1;
         }
     }
 
