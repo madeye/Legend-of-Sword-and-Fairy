@@ -530,7 +530,7 @@ fn encode(paths: &Paths, fps: u64) {
     let mut frame = vec![0u8; INPUT_SIZE];
     // Opaque black, for output frames that precede the first captured one.
     let mut upscaled = vec![0u8; OUTPUT_SIZE];
-    for px in upscaled.chunks_exact_mut(4) {
+    for px in upscaled.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
 

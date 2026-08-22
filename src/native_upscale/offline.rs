@@ -151,7 +151,7 @@ mod tests {
             "output does not follow the input gradient"
         );
         assert!(
-            out.chunks_exact(4).all(|p| p[3] == 255),
+            out.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
             "output not opaque"
         );
     }
