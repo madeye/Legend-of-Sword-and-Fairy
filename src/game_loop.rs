@@ -406,7 +406,9 @@ fn decode_opening_menu_hd() -> io::Result<Vec<u8>> {
     match info.color_type {
         png::ColorType::Rgb => Ok(bytes.to_vec()),
         png::ColorType::Rgba => Ok(bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|px| [px[0], px[1], px[2]])
             .collect()),
         other => Err(io::Error::other(format!(
@@ -441,7 +443,12 @@ fn render_720p(
             .checked_div(target_sum)
             .unwrap_or(255)
             .min(255) as u16;
-        for (src, dst) in rgb.chunks_exact(3).zip(out.chunks_exact_mut(4)) {
+        for (src, dst) in rgb
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(out.as_chunks_mut::<4>().0)
+        {
             dst[0] = (u16::from(src[0]) * fade / 255) as u8;
             dst[1] = (u16::from(src[1]) * fade / 255) as u8;
             dst[2] = (u16::from(src[2]) * fade / 255) as u8;
@@ -467,7 +474,7 @@ fn render_720p(
     }
 
     out.fill(0);
-    for pixel in out.chunks_exact_mut(4) {
+    for pixel in out.as_chunks_mut::<4>().0 {
         pixel[3] = 0xff;
     }
     let (src_y0, dst_y0, visible_h) = match shake {
@@ -651,6 +658,9 @@ impl Engine {
         };
         // Headless engines (tests, tools) must never block on input.
         engine.ui.auto_confirm = headless;
+        // PAL_InitUI: load gpSpriteUI / dialog icons. Without this, menu boxes,
+        // numbers, the item picture frame, and dialog wait icons never blit.
+        engine.init_ui()?;
         // Create the window right away so the first present works.
         engine.process_event();
         Ok(engine)

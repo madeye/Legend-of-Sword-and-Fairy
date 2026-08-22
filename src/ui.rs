@@ -1271,6 +1271,24 @@ mod tests {
     }
 
     #[test]
+    fn engine_new_loads_ui_sprites() {
+        // PAL_InitUI is part of engine startup. A missing call leaves
+        // sprite_ui empty, so shop item boxes / menu chrome never draw
+        // while BALL.MKF item pictures still blit on the raw scene.
+        std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
+        let e = Engine::new(true).expect("headless engine");
+        assert!(
+            surface::sprite_frame_count(&e.ui.sprite_ui) > 70,
+            "Engine::new must load gpSpriteUI"
+        );
+        assert!(
+            surface::sprite_frame(&e.ui.sprite_ui, SPRITENUM_ITEMBOX).is_some(),
+            "item box frame must be readable after Engine::new"
+        );
+        assert!(surface::sprite_frame_count(&e.ui.dialog_icons) > 0);
+    }
+
+    #[test]
     fn box_draw_and_delete_restores_pixels() {
         let mut e = engine();
         e.screen.clear(5);
