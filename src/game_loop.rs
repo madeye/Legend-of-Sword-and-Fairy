@@ -651,6 +651,9 @@ impl Engine {
         };
         // Headless engines (tests, tools) must never block on input.
         engine.ui.auto_confirm = headless;
+        // PAL_InitUI: load gpSpriteUI / dialog icons. Without this, menu boxes,
+        // numbers, the item picture frame, and dialog wait icons never blit.
+        engine.init_ui()?;
         // Create the window right away so the first present works.
         engine.process_event();
         Ok(engine)
