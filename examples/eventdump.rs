@@ -4,13 +4,17 @@ use rustpal::game_loop::Engine;
 
 fn main() {
     std::env::set_var("PAL_DATA_DIR", concat!(env!("CARGO_MANIFEST_DIR"), "/pal"));
-    let path = std::env::args().nth(1).expect("checkpoint path");
-    let bytes = std::fs::read(path).expect("read checkpoint");
+    let path = std::env::args().nth(1).expect("checkpoint path or 'new'");
     let mut engine = Engine::new(true).expect("headless engine");
-    engine
-        .globals
-        .load_game_from_bytes(&bytes)
-        .expect("load checkpoint");
+    if path == "new" {
+        engine.globals.load_default_game().expect("new game");
+    } else {
+        let bytes = std::fs::read(&path).expect("read checkpoint");
+        engine
+            .globals
+            .load_game_from_bytes(&bytes)
+            .expect("load checkpoint");
+    }
     println!(
         "current scene={} viewport={:?}",
         engine.globals.num_scene, engine.globals.viewport

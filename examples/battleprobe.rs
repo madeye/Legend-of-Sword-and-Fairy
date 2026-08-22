@@ -5,14 +5,14 @@ use rustpal::global::MAX_PLAYER_ROLES;
 fn arm_party(engine: &mut Engine) {
     let roles = &mut engine.globals.game.player_roles;
     for role in 0..MAX_PLAYER_ROLES {
-        roles.max_hp[role] = roles.max_hp[role].max(30_000);
+        roles.max_hp[role] = roles.max_hp[role].max(9999);
         roles.hp[role] = roles.max_hp[role];
-        roles.max_mp[role] = roles.max_mp[role].max(10_000);
+        roles.max_mp[role] = roles.max_mp[role].max(9999);
         roles.mp[role] = roles.max_mp[role];
-        roles.attack_strength[role] = roles.attack_strength[role].max(5_000);
-        roles.magic_strength[role] = roles.magic_strength[role].max(5_000);
-        roles.defense[role] = roles.defense[role].max(5_000);
-        roles.dexterity[role] = roles.dexterity[role].max(500);
+        roles.attack_strength[role] = roles.attack_strength[role].max(2000);
+        roles.magic_strength[role] = roles.magic_strength[role].max(2000);
+        roles.defense[role] = roles.defense[role].max(400);
+        roles.dexterity[role] = roles.dexterity[role].max(300);
         roles.poison_resistance[role] = 100;
     }
 }

@@ -255,6 +255,13 @@ fn ui_is_action_valid(engine: &Engine, battle: &Battle, action: u8) -> bool {
 
 /// PAL_BattleUIPickAutoMagic.
 fn ui_pick_auto_magic(engine: &Engine, player_role: usize, random_range: i32) -> u16 {
+    if engine.battle_instant {
+        // Headless auto-battle uses physical attacks only. Story magics can
+        // run scripts that set BattleResult::Lost (比武 team 188) or spend
+        // the turn on a 0-damage effect while a scripted boss wipes the
+        // party. Instant refill in start_battle_impl covers the damage.
+        return 0;
+    }
     if engine.globals.player_status[player_role][STATUS_SILENCE] != 0 {
         return 0;
     }

@@ -568,6 +568,11 @@ pub struct Engine {
     /// skipped.  Off in normal play; tests set it to fight real battles fast.
     pub battle_instant: bool,
 
+    /// Every fight that entered `start_battle_ex` (script `0x0007` and map
+    /// encounters). Empty during ordinary interactive play; the playthrough
+    /// driver and tests read it after each frame.
+    pub battle_records: Vec<crate::battle::BattleRecord>,
+
     /// Optional per-present capture hook (headless recording tools).  Called
     /// on every presented frame with the 320×200 RGBA image (shake applied,
     /// exactly what a player would see) and the tick time.  `None` in normal
@@ -648,6 +653,7 @@ impl Engine {
             ending_effect_sprite: 0,
             battle: None,
             battle_instant: false,
+            battle_records: Vec::new(),
             frame_sink: None,
             demo_pilot: None,
             autopilot: None,

@@ -9,6 +9,10 @@ use crate::surface::{self, copy_rows, Surface, SCREEN_H, SCREEN_W};
 /// Local port of PAL_WaitForKey (script.c) for the ending flow.
 /// XXX consolidate with script.rs's version once the script port lands.
 fn wait_for_key(engine: &mut Engine, timeout_ms: u64) {
+    if engine.ui.auto_confirm {
+        engine.input.clear_key_state();
+        return;
+    }
     let deadline = if timeout_ms == 0 {
         u64::MAX
     } else {

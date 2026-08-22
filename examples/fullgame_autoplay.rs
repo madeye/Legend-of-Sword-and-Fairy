@@ -8,7 +8,7 @@
 
 use rustpal::game_loop::Engine;
 use rustpal::global::{
-    EventObject, ITEMFLAG_USABLE, LOAD_PLAYER_SPRITE, LOAD_SCENE, MAX_PLAYER_ROLES,
+    seed_random, EventObject, ITEMFLAG_USABLE, LOAD_PLAYER_SPRITE, LOAD_SCENE, MAX_PLAYER_ROLES,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -83,6 +83,8 @@ struct Pilot {
     target_crossings: u8,
     last_scene_escape_frame: u64,
     skip_start_frame: bool,
+    scene_steps: u64,
+    scene_enter_frame: u32,
 }
 
 impl Pilot {
@@ -119,6 +121,8 @@ impl Pilot {
             target_crossings: 0,
             last_scene_escape_frame: 0,
             skip_start_frame: false,
+            scene_steps: 0,
+            scene_enter_frame: engine.globals.frame_num,
         }
     }
 
@@ -362,6 +366,29 @@ impl Pilot {
             if scene != self.scene {
                 *self.scene_visits.entry(scene).or_default() += 1;
                 eprintln!(
+                    "SCENE from={} to={} frame={} steps={} pos={:?}",
+                    self.scene,
+                    scene,
+                    engine.globals.frame_num,
+                    self.scene_steps,
+                    engine.globals.viewport
+                );
+                if is_maze_scene(self.scene) {
+                    eprintln!(
+                        "MAZE leave scene={} map={} steps={} frames={} pos={:?}",
+                        self.scene,
+                        engine.globals.game.scenes[self.scene as usize - 1].map_num,
+                        self.scene_steps,
+                        engine
+                            .globals
+                            .frame_num
+                            .saturating_sub(self.scene_enter_frame),
+                        engine.globals.viewport
+                    );
+                }
+                self.scene_steps = 0;
+                self.scene_enter_frame = engine.globals.frame_num;
+                eprintln!(
                     "scene {} -> {} at frame {} position {:?}",
                     self.scene, scene, engine.globals.frame_num, engine.globals.viewport
                 );
@@ -456,6 +483,8 @@ impl Pilot {
                 self.target_crossings = 0;
             }
             self.idle_frames = 0;
+        } else if player != self.last_player {
+            self.scene_steps += 1;
         }
         self.last_player = player;
         self.touch_snapshot = active_touch_objects(engine);
@@ -533,6 +562,17 @@ impl Pilot {
                 {
                     return None;
                 }
+                if event_id == TOWER_COLLAPSE && !dragon_pillars_cleared(engine) {
+                    return None;
+                }
+                if event_id == HUAXUECHI_ENTRY && !mingwang_defeated(engine) {
+                    return None;
+                }
+                if event_id == YANGZHOU_QIXING_DOOR
+                    && (!mingwang_defeated(engine) || dragon_pillars_cleared(engine))
+                {
+                    return None;
+                }
                 let pos = event_position(event);
                 let distance = metric(player, pos);
                 // Exhaust conversations, switches, and chests before taking
@@ -571,6 +611,15 @@ impl Pilot {
                 return Some((target, path));
             }
             if target.event.trigger_mode < 4 {
+                if DRAGON_PILLAR_EVENTS.contains(&target.event_id) {
+                    // 七星 神龙 fights must be reached on map 185. Firing
+                    // 0x0007 from an unreachable spawn skips the maze walk.
+                    eprintln!(
+                        "skipping unreachable 七星 pillar event={} until a collision path exists",
+                        target.event_id
+                    );
+                    continue;
+                }
                 eprintln!(
                     "directing unreachable manual event={} script={} mode={} state={}",
                     target.event_id,
@@ -614,6 +663,12 @@ impl Pilot {
                     || event.trigger_script == 0
                     || event.trigger_mode < 4
                 {
+                    return None;
+                }
+                if transition.event_id == TOWER_COLLAPSE && !dragon_pillars_cleared(engine) {
+                    return None;
+                }
+                if transition.event_id == HUAXUECHI_ENTRY && !mingwang_defeated(engine) {
                     return None;
                 }
                 let target = Target {
@@ -671,6 +726,12 @@ impl Pilot {
                     return None;
                 }
                 let event_id = (index + 1) as u16;
+                if event_id == TOWER_COLLAPSE && !dragon_pillars_cleared(engine) {
+                    return None;
+                }
+                if event_id == HUAXUECHI_ENTRY && !mingwang_defeated(engine) {
+                    return None;
+                }
                 Some((
                     self.scene_visits.get(&destination).copied().unwrap_or(0),
                     event_id,
@@ -693,10 +754,57 @@ impl Pilot {
         exits.into_iter().map(|(_, _, target)| target).next()
     }
 
+    fn enter_qixing_array(&mut self, engine: &mut Engine) {
+        eprintln!(
+            "entering 七星磐龙阵 via script={} from scene={}",
+            QIXING_WARP, engine.globals.num_scene
+        );
+        engine.run_trigger_script(QIXING_WARP, 0xFFFF);
+        // 29171 is only opcode 0x0059. Scene 144's enter script (29174)
+        // places the party with 0x0046; that runs inside start_frame after
+        // the map chunk is loaded. Pathfinding before that enter still uses
+        // 化血池 coordinates and treats every pillar as unreachable.
+        engine.load_resources();
+        if engine.globals.entering_scene {
+            engine.start_frame();
+        }
+        self.target = None;
+        self.forced_target = None;
+        self.path.clear();
+        self.search_directions.clear();
+        self.skip_start_frame = true;
+    }
+
+    fn maybe_enter_qixing_array(&mut self, engine: &mut Engine) -> bool {
+        if !mingwang_defeated(engine) || dragon_pillars_cleared(engine) {
+            return false;
+        }
+        if engine.globals.num_scene != 138 {
+            return false;
+        }
+        // Scene 138 is 化血池. The collapse touch (2417) must not fire until
+        // the seven 神龙 on scene 144 have been fought through 0x0007.
+        self.enter_qixing_array(engine);
+        true
+    }
+
     fn prepare_frame(&mut self, engine: &mut Engine) {
         self.skip_start_frame = false;
         self.release_direction(engine);
         self.refresh_world(engine);
+
+        if engine.globals.entering_scene {
+            // Opcode 0x0059 sets entering_scene; the enter script (party
+            // 0x0046, set-party, dialog) runs inside start_frame after
+            // load_resources. Targeting against the previous viewport would
+            // treat every object as unreachable and fire search scripts
+            // without walking the new collision map.
+            eprintln!(
+                "waiting for scene {} enter script before pathfinding",
+                engine.globals.num_scene
+            );
+            return;
+        }
 
         if self.scene == 17 && smash_next_statue(engine) {
             self.target = None;
@@ -800,6 +908,18 @@ impl Pilot {
         if let Some(target) = self.forced_target.take() {
             if target.visit.scene != engine.globals.num_scene {
                 self.forced_target = Some(target);
+            } else if target.event_id == TOWER_COLLAPSE && !dragon_pillars_cleared(engine) {
+                eprintln!(
+                    "deferring tower collapse event={} until 七星磐龙阵 pillars are fought",
+                    target.event_id
+                );
+                self.enter_qixing_array(engine);
+                return;
+            } else if target.event_id == HUAXUECHI_ENTRY && !mingwang_defeated(engine) {
+                eprintln!(
+                    "deferring 化血池 exit event={} until 镇狱明王 is defeated",
+                    target.event_id
+                );
             } else {
                 let index = target.event_id as usize - 1;
                 let script = engine.globals.game.event_objects[index].trigger_script;
@@ -817,6 +937,10 @@ impl Pilot {
                 self.skip_start_frame = true;
                 return;
             }
+        }
+
+        if self.maybe_enter_qixing_array(engine) {
+            return;
         }
 
         if self.target.is_none() {
@@ -1008,6 +1132,50 @@ impl Pilot {
     }
 }
 
+fn is_maze_scene(scene: u16) -> bool {
+    matches!(
+        scene,
+        16 | 17
+            | 40..=47
+            | 70..=74
+            | 100..=113
+            | 144
+            | 172..=199
+            | 215..=226
+            | 277..=293
+    )
+}
+
+/// 锁妖塔 镇狱明王 (scene 139 event 2422). After this fight the story
+/// requires 七星磐龙阵 (scene 144, seven 神龙 0x0007) before the tower
+/// collapse (event 2417 / scenes 140–143).
+const MINGWANG_EVENT: u16 = 2422;
+const QIXING_WARP: u16 = 29171; // opcode 0x0059 to scene 144
+const HUAXUECHI_ENTRY: u16 = 2421; // 139 → 138 化血池
+const TOWER_COLLAPSE: u16 = 2417; // 138 → 140 collapse cutscene
+const YANGZHOU_QIXING_DOOR: u16 = 2561; // scene 152 search warp to 144
+const DRAGON_PILLAR_EVENTS: [u16; 7] = [2466, 2467, 2468, 2469, 2470, 2471, 2472];
+
+fn mingwang_defeated(engine: &Engine) -> bool {
+    engine
+        .globals
+        .game
+        .event_objects
+        .get(MINGWANG_EVENT as usize - 1)
+        .is_some_and(|event| event.state <= 0)
+}
+
+fn dragon_pillars_cleared(engine: &Engine) -> bool {
+    DRAGON_PILLAR_EVENTS.iter().all(|&event_id| {
+        engine
+            .globals
+            .game
+            .event_objects
+            .get(event_id as usize - 1)
+            .is_some_and(|event| event.state != 2)
+    })
+}
+
 fn player_position(engine: &Engine) -> (i32, i32) {
     (
         engine.globals.viewport.0 + engine.globals.partyoffset.0,
@@ -1177,17 +1345,18 @@ fn active_touch_objects(engine: &Engine) -> Vec<(u16, EventObject)> {
 fn arm_party_for_route_probe(engine: &mut Engine) {
     let roles = &mut engine.globals.game.player_roles;
     for role in 0..MAX_PLAYER_ROLES {
-        // Battle damage code preserves the original DOS signed-16-bit HP
-        // comparisons.  Values above i16::MAX wrap negative there and can
-        // turn a one-point enemy hit into an apparent party wipe.
-        roles.max_hp[role] = roles.max_hp[role].max(30_000);
+        // Keep stats inside the DOS WORD/i16-safe band used by battle math.
+        // 30k HP / 5k ATK+DEF makes 比武 (team 188) fail to stick damage
+        // across turns, so the scripted boss heals back to full and wipes
+        // the party; 9999/2000 matches the instant-battle refill and wins.
+        roles.max_hp[role] = roles.max_hp[role].max(9999);
         roles.hp[role] = roles.max_hp[role];
-        roles.max_mp[role] = roles.max_mp[role].max(10_000);
+        roles.max_mp[role] = roles.max_mp[role].max(9999);
         roles.mp[role] = roles.max_mp[role];
-        roles.attack_strength[role] = roles.attack_strength[role].max(5_000);
-        roles.magic_strength[role] = roles.magic_strength[role].max(5_000);
-        roles.defense[role] = roles.defense[role].max(5_000);
-        roles.dexterity[role] = roles.dexterity[role].max(500);
+        roles.attack_strength[role] = roles.attack_strength[role].max(2000);
+        roles.magic_strength[role] = roles.magic_strength[role].max(2000);
+        roles.defense[role] = roles.defense[role].max(400);
+        roles.dexterity[role] = roles.dexterity[role].max(300);
         roles.poison_resistance[role] = 100;
     }
 }
@@ -1598,6 +1767,14 @@ fn main() {
         engine.globals.reload_in_next_tick(0);
     }
     engine.battle_instant = true;
+    if let Some(seed) = std::env::var("RUSTPAL_PLAYTHROUGH_SEED")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|&value| value != 0)
+    {
+        seed_random(seed);
+        eprintln!("PLAYTHROUGH seed={seed}");
+    }
 
     let flags = engine
         .res
@@ -1608,9 +1785,15 @@ fn main() {
     }
     engine.input.clear_key_state();
     engine.start_frame();
+    eprintln!(
+        "PLAYTHROUGH new_game scene={} pos={:?}",
+        engine.globals.num_scene,
+        player_position(&engine)
+    );
 
     let mut pilot = Pilot::new(&engine);
     let mut iterations = 0u64;
+    let mut logged_battles = 0usize;
     while !engine.quit_requested && iterations < MAX_FRAMES {
         // Match Engine::game_main: scene-change scripts set load flags, and
         // the new map/event sprites must be installed before pathfinding or
@@ -1631,6 +1814,14 @@ fn main() {
             engine.start_frame();
         }
         engine.input.clear_key_state();
+        while logged_battles < engine.battle_records.len() {
+            let rec = engine.battle_records[logged_battles];
+            eprintln!(
+                "BATTLE team={} boss={} result={:?} scene={} frame={}",
+                rec.enemy_team, rec.is_boss, rec.result, rec.scene, engine.globals.frame_num
+            );
+            logged_battles += 1;
+        }
         iterations += 1;
         if iterations.is_multiple_of(10_000) {
             std::fs::create_dir_all("recordings").expect("create recordings directory");
@@ -1652,6 +1843,15 @@ fn main() {
         finish_video_recorder(&mut engine, recorder);
     }
 
+    eprintln!(
+        "PLAYTHROUGH complete quit={} iterations={} game_frame={} scene={} pos={:?} battles={}",
+        engine.quit_requested,
+        iterations,
+        engine.globals.frame_num,
+        engine.globals.num_scene,
+        player_position(&engine),
+        engine.battle_records.len()
+    );
     println!(
         "autoplay stopped: quit={} iterations={} game_frame={} scene={} position={:?}",
         engine.quit_requested,
