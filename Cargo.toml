@@ -13,6 +13,10 @@ web-time = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pixels = "0.17.2"
+# cpal 0.15 pins windows 0.54. gpu-allocator (via pixels/wgpu-hal) accepts
+# 0.53–0.62; the lockfile must keep it on 0.62 so Win10 MSVC does not link
+# two windows-core crates (issue 21). Re-apply with:
+#   cargo update -p gpu-allocator --precise 0.28.0
 cpal = "0.15"
 png = "0.18"
 # Blocking adapter/device requests for the windowless upscale device.
