@@ -78,6 +78,18 @@ pub fn select_auto_target(battle: &Battle) -> i32 {
 // The damage formulas (ported exactly).
 // ===========================================================================
 
+/// Subtract `damage` from player HP using C's WORD comparison
+/// (`if (sDamage > hp) sDamage = hp; hp -= sDamage`). Casting HP to `i16`
+/// first is wrong for values above `i16::MAX` and can turn a small hit into
+/// a full wipe.
+fn subtract_player_hp(hp: &mut u16, damage: i16) {
+    if damage <= 0 {
+        return;
+    }
+    let sub = (damage as u32).min(*hp as u32) as u16;
+    *hp -= sub;
+}
+
 /// PAL_CalcBaseDamage. Formula courtesy of palxex and shenyanduxing.
 pub fn calc_base_damage(attack_strength: u16, defense: u16) -> i16 {
     let str_ = attack_strength as f64;
@@ -1796,7 +1808,7 @@ pub fn battle_player_perform_action(engine: &mut Engine, battle: &mut Battle, pl
                             damage = 1;
                         }
                         battle.enemy[ti].e.health =
-                            battle.enemy[ti].e.health.wrapping_sub(damage as u16);
+                            (battle.enemy[ti].e.health as u32).saturating_sub(damage as u32) as u16;
                         if t == 0 {
                             battle.player[pi].current_frame = 7;
                             battle_delay(engine, battle, 4, 0, true);
@@ -1927,10 +1939,10 @@ pub fn battle_player_perform_action(engine: &mut Engine, battle: &mut Battle, pl
                     if damage <= 0 {
                         damage = 1;
                     }
-                    if damage > engine.globals.game.player_roles.hp[target_role] as i16 {
-                        damage = engine.globals.game.player_roles.hp[target_role] as i16;
-                    }
-                    engine.globals.game.player_roles.hp[target_role] -= damage as u16;
+                    subtract_player_hp(
+                        &mut engine.globals.game.player_roles.hp[target_role],
+                        damage,
+                    );
 
                     // Knock the victim back and flash them white as the damage
                     // number pops.
@@ -2458,11 +2470,7 @@ pub fn battle_enemy_perform_action(engine: &mut Engine, battle: &mut Battle, ene
                             }))
                             + (if mag_auto_defend[i] { 1 } else { 0 });
                         damage /= divisor.max(1) as i16;
-                        if damage > engine.globals.game.player_roles.hp[w] as i16 {
-                            damage = engine.globals.game.player_roles.hp[w] as i16;
-                        }
-                        engine.globals.game.player_roles.hp[w] =
-                            engine.globals.game.player_roles.hp[w].wrapping_sub(damage as u16);
+                        subtract_player_hp(&mut engine.globals.game.player_roles.hp[w], damage);
                         if engine.globals.game.player_roles.hp[w] == 0 {
                             engine
                                 .play_sound(engine.globals.game.player_roles.death_sound[w] as i32);
@@ -2495,12 +2503,10 @@ pub fn battle_enemy_perform_action(engine: &mut Engine, battle: &mut Battle, ene
                             1
                         })) + (if auto_defend { 1 } else { 0 });
                     damage /= divisor.max(1) as i16;
-                    if damage > engine.globals.game.player_roles.hp[player_role] as i16 {
-                        damage = engine.globals.game.player_roles.hp[player_role] as i16;
-                    }
-                    engine.globals.game.player_roles.hp[player_role] =
-                        engine.globals.game.player_roles.hp[player_role]
-                            .wrapping_sub(damage as u16);
+                    subtract_player_hp(
+                        &mut engine.globals.game.player_roles.hp[player_role],
+                        damage,
+                    );
                     if engine.globals.game.player_roles.hp[player_role] == 0 {
                         engine.play_sound(
                             engine.globals.game.player_roles.death_sound[player_role] as i32,
@@ -2657,14 +2663,13 @@ pub fn battle_enemy_perform_action(engine: &mut Engine, battle: &mut Battle, ene
             if engine.globals.player_status[player_role][STATUS_PROTECT] != 0 {
                 damage /= 2;
             }
-            if (engine.globals.game.player_roles.hp[player_role] as i16) < damage {
-                damage = engine.globals.game.player_roles.hp[player_role] as i16;
-            }
             if damage <= 0 {
                 damage = 1;
             }
-            engine.globals.game.player_roles.hp[player_role] =
-                engine.globals.game.player_roles.hp[player_role].wrapping_sub(damage as u16);
+            subtract_player_hp(
+                &mut engine.globals.game.player_roles.hp[player_role],
+                damage,
+            );
             battle_display_stat_change(engine, battle);
             battle.player[target as usize].color_shift = 6;
         }
@@ -2889,6 +2894,23 @@ mod tests {
     //  str=50, def=60 : 50>36  -> 50 - 36 + 0.5 = 14.5 -> 14
     //  str=20, def=60 : 20<=36 -> 0
     //  str=200,def=0  : 200>0  -> 400 - 0 + 0.5 = 400.5 -> 400
+    #[test]
+    fn subtract_player_hp_uses_unsigned_clamp() {
+        let mut hp = 30_000u16;
+        subtract_player_hp(&mut hp, 100);
+        assert_eq!(hp, 29_900);
+        // HP above i16::MAX must not be treated as negative and wiped.
+        let mut hp = 40_000u16;
+        subtract_player_hp(&mut hp, 100);
+        assert_eq!(hp, 39_900);
+        let mut hp = 50u16;
+        subtract_player_hp(&mut hp, 80);
+        assert_eq!(hp, 0);
+        let mut hp = 50u16;
+        subtract_player_hp(&mut hp, -3);
+        assert_eq!(hp, 50);
+    }
+
     #[test]
     fn calc_base_damage_vectors() {
         assert_eq!(calc_base_damage(100, 50), 120);

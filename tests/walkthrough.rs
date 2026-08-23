@@ -5,7 +5,8 @@
 
 use rustpal::battle::BattleResult;
 use rustpal::game_loop::Engine;
-use rustpal::global::{seed_random, ScriptEntry, MAX_PLAYER_MAGICS};
+use rustpal::global::{seed_random, EventObject, ScriptEntry, MAX_PLAYER_MAGICS, MAX_PLAYER_ROLES};
+use std::collections::{HashMap, HashSet, VecDeque};
 use winit::keyboard::KeyCode;
 
 fn new_game_engine() -> Engine {
@@ -177,6 +178,17 @@ fn battle_started_from_script_unifies_state_and_awards() {
         scripted.battle.is_none(),
         "engine.battle must be None after the scripted battle ends"
     );
+    assert_eq!(
+        scripted.battle_records.len(),
+        1,
+        "scripted 0x0007 must record exactly one real battle"
+    );
+    assert_eq!(scripted.battle_records[0].enemy_team, team);
+    assert_eq!(scripted.battle_records[0].result, BattleResult::Won);
+    assert!(
+        direct.battle_records.len() == 1 && direct.battle_records[0].result == BattleResult::Won,
+        "direct fight must also go through start_battle_ex"
+    );
 
     // Rewards must have been granted, and match the direct fight exactly.
     assert!(
@@ -193,6 +205,456 @@ fn battle_started_from_script_unifies_state_and_awards() {
     );
     // Auto-battle flag is reset by opcode 0x0007 once the fight is over.
     assert!(!scripted.globals.auto_battle);
+}
+
+/// 扬州 比武招亲 (enemy team 188) is the story gate into 火麒麟洞. Losing
+/// it runs opcode `0x004E` and reloads the new-game slot, which is the
+/// 余杭-inn wipe seen in stalled playthroughs.
+#[test]
+fn yangzhou_contest_boss_is_winnable_with_instant_auto_battle() {
+    let mut e = battle_engine();
+    e.globals.max_party_member_index = 2;
+    e.globals.party[0].player_role = 0;
+    e.globals.party[1].player_role = 1;
+    e.globals.party[2].player_role = 2;
+    seed_random(4242);
+    let result = e.start_battle_ex(188, true, true);
+    assert_eq!(
+        result,
+        BattleResult::Won,
+        "比武招亲 boss (team 188) must be winnable under instant auto-battle"
+    );
+    assert!(e.battle.is_none());
+    assert_eq!(e.battle_records.last().map(|r| r.enemy_team), Some(188));
+}
+
+fn arm_like_autoplay(e: &mut Engine) {
+    let roles = &mut e.globals.game.player_roles;
+    for role in 0..MAX_PLAYER_ROLES {
+        roles.max_hp[role] = roles.max_hp[role].max(9999);
+        roles.hp[role] = roles.max_hp[role];
+        roles.max_mp[role] = roles.max_mp[role].max(9999);
+        roles.mp[role] = roles.max_mp[role];
+        roles.attack_strength[role] = roles.attack_strength[role].max(2000);
+        roles.magic_strength[role] = roles.magic_strength[role].max(2000);
+        roles.defense[role] = roles.defense[role].max(400);
+        roles.dexterity[role] = roles.dexterity[role].max(300);
+        roles.poison_resistance[role] = 100;
+    }
+}
+
+/// The live playthrough arms every role before each frame, then the 比武
+/// enter script (0x0075 + 0x0007) starts team 188. That path must win; a
+/// loss reloads slot 0 and dumps the story back to 余杭.
+#[test]
+fn yangzhou_contest_via_story_script_wins_with_autoplay_party() {
+    let mut e = battle_engine();
+    arm_like_autoplay(&mut e);
+    e.globals.max_party_member_index = 1;
+    e.globals.party[0].player_role = 0;
+    e.globals.party[1].player_role = 1;
+    e.globals.in_battle = false;
+    seed_random(4242);
+    // 28509: 0x0075 set party 李逍遥/赵灵儿/林月如, heal, then 0x0007 team 188.
+    e.run_trigger_script(28509, 0xFFFF);
+    let rec = e
+        .battle_records
+        .last()
+        .expect("0x0007 must record team 188");
+    assert_eq!(rec.enemy_team, 188);
+    assert_eq!(
+        rec.result,
+        BattleResult::Won,
+        "story 0x0007 path for 比武 must win under autoplay stats; got {:?}",
+        rec.result
+    );
+}
+
+const QIXING_WALK_DIRS: [(KeyCode, (i32, i32)); 4] = [
+    (KeyCode::ArrowUp, (16, -8)),
+    (KeyCode::ArrowRight, (16, 8)),
+    (KeyCode::ArrowDown, (-16, 8)),
+    (KeyCode::ArrowLeft, (-16, -8)),
+];
+
+fn player_pos(e: &Engine) -> (i32, i32) {
+    (
+        e.globals.viewport.0 + e.globals.partyoffset.0,
+        e.globals.viewport.1 + e.globals.partyoffset.1,
+    )
+}
+
+fn event_pos(event: EventObject) -> (i32, i32) {
+    (event.x as i16 as i32, event.y as i16 as i32)
+}
+
+fn can_search_event_from(position: (i32, i32), event: (i32, i32), mode: u16) -> bool {
+    let limit = (mode as usize * 6).saturating_sub(4).min(13);
+    for direction in 0..4 {
+        let (x_offset, y_offset) = match direction {
+            0 => (-16, 8),
+            1 => (-16, -8),
+            2 => (16, -8),
+            _ => (16, 8),
+        };
+        let (mut x, mut y) = position;
+        let mut range = [(0i32, 0i32); 13];
+        range[0] = position;
+        for index in 0..4 {
+            range[index * 3 + 1] = (x + x_offset, y + y_offset);
+            range[index * 3 + 2] = (x, y + y_offset * 2);
+            range[index * 3 + 3] = (x + x_offset * 2, y);
+            x += x_offset;
+            y += y_offset;
+        }
+        if range[..limit].contains(&event) {
+            return true;
+        }
+    }
+    false
+}
+
+fn path_to_event_on_collision(e: &Engine, event_id: u16) -> Option<VecDeque<KeyCode>> {
+    let event = *e.globals.game.event_objects.get(event_id as usize - 1)?;
+    let start = player_pos(e);
+    let goal = event_pos(event);
+    let reached = |position| can_search_event_from(position, goal, event.trigger_mode.max(1));
+    if reached(start) {
+        return Some(VecDeque::new());
+    }
+
+    let try_path = |check_event_objects: bool| -> Option<VecDeque<KeyCode>> {
+        let mut queue = VecDeque::from([start]);
+        let mut previous: HashMap<(i32, i32), ((i32, i32), KeyCode)> = HashMap::new();
+        let mut seen = HashSet::from([start]);
+        let mut found = None;
+        while let Some(position) = queue.pop_front() {
+            if reached(position) {
+                found = Some(position);
+                break;
+            }
+            if seen.len() > 200_000 {
+                break;
+            }
+            for &(key, delta) in &QIXING_WALK_DIRS {
+                let next = (position.0 + delta.0, position.1 + delta.1);
+                if !(0..8192).contains(&next.0)
+                    || !(0..4096).contains(&next.1)
+                    || seen.contains(&next)
+                    || e.check_obstacle_with_range(next, check_event_objects, 0, true)
+                {
+                    continue;
+                }
+                seen.insert(next);
+                previous.insert(next, (position, key));
+                queue.push_back(next);
+            }
+        }
+        let mut at = found?;
+        let mut reversed = Vec::new();
+        while at != start {
+            let &(before, key) = previous.get(&at)?;
+            reversed.push(key);
+            at = before;
+        }
+        reversed.reverse();
+        Some(reversed.into())
+    };
+
+    try_path(true).or_else(|| try_path(false))
+}
+
+fn walk_keys(e: &mut Engine, path: &VecDeque<KeyCode>) -> u32 {
+    let mut tile_moves = 0u32;
+    for &key in path {
+        let before = player_pos(e);
+        e.input.handle_key_event(key, true);
+        e.input.update_keyboard_state(e.ticks() + 1000);
+        e.start_frame();
+        e.input.handle_key_event(key, false);
+        e.input.update_keyboard_state(e.ticks() + 2000);
+        e.input.clear_key_state();
+        if player_pos(e) != before {
+            tile_moves += 1;
+        } else {
+            eprintln!("walk stalled at {before:?} key={key:?}");
+        }
+    }
+    tile_moves
+}
+
+/// 锁妖塔 七星磐龙阵: after 镇狱明王, the real warp script 29171 (opcode
+/// `0x0059`) enters scene 144. The enter script places the party, then each
+/// of the seven pillar objects is reached on map 185's live collision before
+/// its `0x0007` 神龙 fight. Completing the last pillar warps to scene 149.
+#[test]
+fn qixing_dragon_pillars_are_seven_scripted_battles_after_mingwang() {
+    let mut e = battle_engine();
+    arm_like_autoplay(&mut e);
+    e.globals.max_party_member_index = 2;
+    e.globals.party[0].player_role = 0;
+    e.globals.party[1].player_role = 1;
+    e.globals.party[2].player_role = 2;
+    seed_random(4242);
+
+    e.run_trigger_script(26079, 2422);
+    assert!(
+        e.battle_records
+            .iter()
+            .any(|r| r.enemy_team == 43 && r.result == BattleResult::Won),
+        "镇狱明王 (team 43) must be won through opcode 0x0007"
+    );
+    assert!(
+        e.globals.game.event_objects[2422 - 1].state <= 0,
+        "镇狱明王 event must be cleared after the fight"
+    );
+
+    e.run_trigger_script(29171, 0xFFFF);
+    let flags = e.res.load_resources(&mut e.globals).expect("load 七星 map");
+    assert!(flags.scene, "scene 144 map must load after 0x0059");
+    assert_eq!(
+        e.globals.num_scene, 144,
+        "script 29171 must enter 七星磐龙阵 via opcode 0x0059"
+    );
+    assert!(
+        e.res.map.as_ref().is_some_and(|map| map.num > 0),
+        "七星 map must be the real MAP.MKF chunk"
+    );
+
+    let pos_before_enter = player_pos(&e);
+    e.start_frame();
+    let spawn = player_pos(&e);
+    let spawn_viewport = e.globals.viewport;
+    let spawn_offset = e.globals.partyoffset;
+    assert_eq!(
+        spawn,
+        (0x25 * 32, 0x11 * 16),
+        "scene-enter 0x0046 must place the party on the 七星 map"
+    );
+    assert_ne!(
+        pos_before_enter, spawn,
+        "enter script must move the party off the previous scene's coordinates"
+    );
+    assert_eq!(e.globals.num_scene, 144);
+
+    let start_scene = e.globals.num_scene;
+    let mut stopped_by_block = false;
+    for key in [
+        KeyCode::ArrowDown,
+        KeyCode::ArrowLeft,
+        KeyCode::ArrowUp,
+        KeyCode::ArrowRight,
+    ] {
+        let before = player_pos(&e);
+        e.input.handle_key_event(key, true);
+        for _ in 0..48 {
+            let prev = player_pos(&e);
+            e.input.update_keyboard_state(e.ticks() + 1000);
+            e.start_frame();
+            e.input.clear_key_state();
+            if e.globals.num_scene != start_scene {
+                break;
+            }
+            if player_pos(&e) == prev && prev != before {
+                stopped_by_block = true;
+                break;
+            }
+        }
+        e.input.handle_key_event(key, false);
+        let after = player_pos(&e);
+        let dist = (after.0 - before.0).abs() + (after.1 - before.1).abs() * 2;
+        if dist < 48 * 16 {
+            stopped_by_block = true;
+        }
+        if e.globals.num_scene != start_scene {
+            break;
+        }
+    }
+    assert!(
+        stopped_by_block,
+        "holding a direction on 七星磐龙阵 must be stopped by blocked tiles"
+    );
+
+    // Restore the enter-script spawn so each pillar is reached from the
+    // real 0x0046 landing, not from a wall-probe tile.
+    e.globals.viewport = spawn_viewport;
+    e.globals.partyoffset = spawn_offset;
+    assert_eq!(player_pos(&e), spawn);
+    assert_eq!(e.globals.num_scene, 144);
+
+    const PILLARS: [(u16, u16); 7] = [
+        (2466, 305),
+        (2467, 306),
+        (2468, 307),
+        (2469, 308),
+        (2470, 309),
+        (2471, 310),
+        (2472, 311),
+    ];
+    let mut tile_moves = 0u32;
+    let mut longest_path = 0usize;
+    for (event_id, team) in PILLARS {
+        arm_like_autoplay(&mut e);
+        e.globals.auto_battle = true;
+        let before_walk = player_pos(&e);
+        let goal = event_pos(e.globals.game.event_objects[event_id as usize - 1]);
+        let path = path_to_event_on_collision(&e, event_id)
+            .unwrap_or_else(|| panic!("no collision path to 七星 pillar {event_id}"));
+        longest_path = longest_path.max(path.len());
+        eprintln!(
+            "pillar {event_id} team={team} from={before_walk:?} goal={goal:?} path={}",
+            path.len()
+        );
+        assert!(
+            !path.is_empty() || can_search_event_from(before_walk, goal, 2),
+            "pillar {event_id} must be walked or already in search range"
+        );
+        let moved = walk_keys(&mut e, &path);
+        tile_moves += moved;
+        eprintln!(
+            "pillar {event_id} after={:?} moved={moved} in_range={}",
+            player_pos(&e),
+            can_search_event_from(player_pos(&e), goal, 2)
+        );
+        assert_eq!(
+            e.globals.num_scene, 144,
+            "walking to pillar {event_id} must not assign a later scene"
+        );
+        assert!(
+            can_search_event_from(player_pos(&e), goal, 2),
+            "party must be in search range of pillar {event_id} before 0x0007; at {:?} goal {:?} path {} moved {moved}",
+            player_pos(&e),
+            goal,
+            path.len()
+        );
+        let script = e.globals.game.event_objects[event_id as usize - 1].trigger_script;
+        e.run_trigger_script(script, event_id);
+        let rec = e
+            .battle_records
+            .last()
+            .expect("pillar 0x0007 must record a battle");
+        assert_eq!(rec.enemy_team, team, "pillar event {event_id}");
+        assert_eq!(rec.result, BattleResult::Won, "pillar team {team}");
+        assert!(e.battle.is_none());
+    }
+
+    assert!(
+        longest_path >= 8,
+        "at least one pillar must require a real collision walk, longest path={longest_path}"
+    );
+    assert!(
+        tile_moves >= 16,
+        "expected many intra-maze tile moves on scene 144, got {tile_moves}"
+    );
+
+    let dragon_wins = e
+        .battle_records
+        .iter()
+        .filter(|r| (305..=311).contains(&r.enemy_team) && r.result == BattleResult::Won)
+        .count();
+    assert_eq!(dragon_wins, 7);
+    assert_eq!(
+        e.globals.num_scene, 149,
+        "the seventh pillar must leave 七星磐龙阵 via opcode 0x0059"
+    );
+}
+
+/// 仙灵岛外围 (scene 16) is reached by the real boat teleport script
+/// (opcode `0x0059`), then walked on the live blocked-tile map. The test
+/// never writes `num_scene` itself.
+#[test]
+fn maze_island_walks_on_real_collision_without_assigning_scene() {
+    let mut e = new_game_engine();
+    e.battle_instant = true;
+    e.globals.auto_battle = true;
+
+    // Script 8452 is the DOS data's island-shore teleport: set party
+    // position, then 0x0059 to scene 16. Running it is the same path the
+    // story boat uses, not a test-only scene poke.
+    const ISLAND_SHORE_TELEPORT: u16 = 8452;
+    e.run_trigger_script(ISLAND_SHORE_TELEPORT, 0xFFFF);
+    assert_eq!(
+        e.globals.num_scene, 16,
+        "island teleport script must enter scene 16 via opcode 0x0059"
+    );
+    let flags = e
+        .res
+        .load_resources(&mut e.globals)
+        .expect("load island map");
+    assert!(flags.scene, "scene resources must load after 0x0059");
+    assert!(
+        e.res.map.as_ref().is_some_and(|map| map.num > 0),
+        "island map must be the real MAP.MKF chunk"
+    );
+
+    let start_pos = (
+        e.globals.viewport.0 + e.globals.partyoffset.0,
+        e.globals.viewport.1 + e.globals.partyoffset.1,
+    );
+    let start_scene = e.globals.num_scene;
+    let mut tile_moves = 0u32;
+    let mut stopped_by_block = false;
+
+    'dirs: for key in [
+        KeyCode::ArrowDown,
+        KeyCode::ArrowLeft,
+        KeyCode::ArrowUp,
+        KeyCode::ArrowRight,
+    ] {
+        let before = (
+            e.globals.viewport.0 + e.globals.partyoffset.0,
+            e.globals.viewport.1 + e.globals.partyoffset.1,
+        );
+        e.input.handle_key_event(key, true);
+        for _ in 0..48 {
+            let prev = (
+                e.globals.viewport.0 + e.globals.partyoffset.0,
+                e.globals.viewport.1 + e.globals.partyoffset.1,
+            );
+            e.input.update_keyboard_state(e.ticks() + 1000);
+            e.start_frame();
+            e.input.clear_key_state();
+            let now = (
+                e.globals.viewport.0 + e.globals.partyoffset.0,
+                e.globals.viewport.1 + e.globals.partyoffset.1,
+            );
+            if now != prev {
+                tile_moves += 1;
+            }
+            // A live trigger may change the scene. This test never writes
+            // `num_scene`; a scripted leave is the authentic exit path.
+            if e.globals.num_scene != start_scene {
+                e.input.handle_key_event(key, false);
+                break 'dirs;
+            }
+        }
+        e.input.handle_key_event(key, false);
+        let after = (
+            e.globals.viewport.0 + e.globals.partyoffset.0,
+            e.globals.viewport.1 + e.globals.partyoffset.1,
+        );
+        let dist = (after.0 - before.0).abs() + (after.1 - before.1).abs() * 2;
+        // 48 frames of walking at 16px/step would cover 48 tiles if unbounded.
+        if dist < 48 * 16 {
+            stopped_by_block = true;
+        }
+    }
+
+    let end_pos = (
+        e.globals.viewport.0 + e.globals.partyoffset.0,
+        e.globals.viewport.1 + e.globals.partyoffset.1,
+    );
+    assert_ne!(start_pos, end_pos, "party never moved on the island map");
+    assert!(
+        tile_moves >= 16,
+        "expected many intra-maze tile moves, got {tile_moves}"
+    );
+    assert!(
+        stopped_by_block || e.globals.num_scene != start_scene,
+        "holding a direction was never stopped by blocked tiles"
+    );
+    // The test body never assigns `num_scene`. Any leave is the island's
+    // own teleport/trigger script.
 }
 
 #[test]

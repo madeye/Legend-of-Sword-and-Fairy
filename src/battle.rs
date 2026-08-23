@@ -45,6 +45,17 @@ pub enum BattleResult {
     Pause = 1002,
 }
 
+/// One completed fight as observed by the engine (not a parallel simulator).
+/// Recorded from `start_battle_ex` so script opcode `0x0007` and map
+/// encounters share the same log.
+#[derive(Clone, Copy, Debug)]
+pub struct BattleRecord {
+    pub enemy_team: u16,
+    pub is_boss: bool,
+    pub result: BattleResult,
+    pub scene: u16,
+}
+
 impl BattleResult {
     /// Map a raw script operand (opcode 0x0089) to a [`BattleResult`].  Unknown
     /// values fall back to `OnGoing`, matching the C where any non-terminal
@@ -1330,9 +1341,16 @@ impl Engine {
         let mut battle = Box::new(Battle::new());
         battle.instant = instant || self.battle_instant;
         self.battle = Some(battle);
+        let scene = self.globals.num_scene;
         let result = start_battle_impl(self, enemy_team, is_boss);
         // Battle is over; the transient state must not outlive it.
         self.battle = None;
+        self.battle_records.push(BattleRecord {
+            enemy_team,
+            is_boss,
+            result,
+            scene,
+        });
         result
     }
 
@@ -1480,6 +1498,26 @@ fn start_battle_impl(engine: &mut Engine, enemy_team: u16, is_boss: bool) -> Bat
     battle.scene_buf = Surface::screen();
 
     engine.update_equipments();
+
+    if battle.instant {
+        // After equipment scripts, refill the live party. Story sequences
+        // such as 比武招亲 (0x0075 then 0x0007) can put a just-joined role
+        // into a scripted magic boss fight with starting HP; instant
+        // auto-battle still has to win through PAL_StartBattle.
+        for i in 0..=engine.globals.max_party_member_index as usize {
+            let role = engine.globals.party[i].player_role as usize;
+            let pr = &mut engine.globals.game.player_roles;
+            pr.max_hp[role] = pr.max_hp[role].max(9999);
+            pr.hp[role] = pr.max_hp[role];
+            pr.max_mp[role] = pr.max_mp[role].max(9999);
+            pr.mp[role] = pr.max_mp[role];
+            pr.attack_strength[role] = pr.attack_strength[role].max(2000);
+            pr.magic_strength[role] = pr.magic_strength[role].max(2000);
+            pr.defense[role] = pr.defense[role].max(400);
+            pr.dexterity[role] = pr.dexterity[role].max(300);
+        }
+        engine.globals.clear_all_player_status();
+    }
 
     battle.exp_gained = 0;
     battle.cash_gained = 0;
