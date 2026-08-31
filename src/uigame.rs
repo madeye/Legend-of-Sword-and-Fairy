@@ -1615,10 +1615,32 @@ mod tests {
     #[test]
     fn show_cash_box() {
         let mut e = engine();
+        // Box + 金钱, no digits: the issue 26 screenshot (label visible, amount gone).
         e.screen.clear(0);
-        let h = e.show_cash(999);
+        let _ = e.create_single_line_box((0, 0), 5, true);
+        let label = e.texts.word(CASH_LABEL as usize);
+        e.draw_text(&label, (10, 10), 0, false, false);
+        let label_only = e.screen.pixels.clone();
+
+        e.screen.clear(0);
+        let h = e.show_cash(12345);
         assert_ne!(h, 0);
-        assert!(nonzero(&e) > 0);
+        assert_ne!(
+            e.screen.pixels.as_slice(),
+            label_only.as_slice(),
+            "show_cash(12345) must blit yellow digits on top of 金钱"
+        );
+
+        e.screen.clear(0);
+        let _ = e.show_cash(0);
+        let cash_zero = e.screen.pixels.clone();
+        e.screen.clear(0);
+        let _ = e.show_cash(12345);
+        assert_ne!(
+            e.screen.pixels.as_slice(),
+            cash_zero.as_slice(),
+            "show_cash must differ for 12345 vs 0"
+        );
     }
 
     #[test]

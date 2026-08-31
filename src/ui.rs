@@ -1270,6 +1270,20 @@ mod tests {
         assert!(surface::sprite_frame_count(&e.ui.dialog_icons) > 0);
     }
 
+    fn frame_has_pixels(sprite: &[u8], n: usize) -> bool {
+        let Some(f) = surface::sprite_frame(sprite, n) else {
+            return false;
+        };
+        let w = surface::rle_width(f);
+        let h = surface::rle_height(f);
+        if w == 0 || h == 0 {
+            return false;
+        }
+        let mut s = surface::Surface::new(w.max(1), h.max(1));
+        s.blit_rle(f, 0, 0);
+        s.pixels.iter().any(|&p| p != 0)
+    }
+
     #[test]
     fn engine_new_loads_ui_sprites() {
         // PAL_InitUI is part of engine startup. A missing call leaves
@@ -1286,6 +1300,39 @@ mod tests {
             "item box frame must be readable after Engine::new"
         );
         assert!(surface::sprite_frame_count(&e.ui.dialog_icons) > 0);
+        // Cash digits (ui.c PAL_DrawNumber): yellow 19-28, blue 29-38, cyan 56-65.
+        // Empty frames here is issue 26: 金钱 draws via the font, amounts do not.
+        for n in 19..=28 {
+            assert!(
+                frame_has_pixels(&e.ui.sprite_ui, n),
+                "yellow digit frame {n} must be a non-empty RLE after Engine::new"
+            );
+        }
+        for n in 29..=38 {
+            assert!(
+                frame_has_pixels(&e.ui.sprite_ui, n),
+                "blue digit frame {n} must be a non-empty RLE after Engine::new"
+            );
+        }
+        for n in 56..=65 {
+            assert!(
+                frame_has_pixels(&e.ui.sprite_ui, n),
+                "cyan digit frame {n} must be a non-empty RLE after Engine::new"
+            );
+        }
+        // Single-line cash box chrome (ui.c frames 44/45/46) and 3x3 menu box.
+        for n in 44..=46 {
+            assert!(
+                frame_has_pixels(&e.ui.sprite_ui, n),
+                "single-line box frame {n} must be readable after Engine::new"
+            );
+        }
+        for n in 0..=8 {
+            assert!(
+                frame_has_pixels(&e.ui.sprite_ui, n),
+                "menu box frame {n} must be readable after Engine::new"
+            );
+        }
     }
 
     #[test]
@@ -1309,11 +1356,30 @@ mod tests {
         assert!(nonzero_pixels(&e) > 0);
         e.delete_box(h);
         assert_eq!(nonzero_pixels(&e), 0);
-        // Cash box draws text + number.
+        // Label-only blit: box chrome + 金钱 (word 21) and no digit sprites.
+        e.screen.clear(0);
+        let _ = e.create_single_line_box((0, 0), 5, true);
+        let label = e.texts.word(21);
+        e.draw_text(&label, (10, 10), 0, false, false);
+        let label_only = e.screen.pixels.clone();
+
         e.screen.clear(0);
         let cash = e.show_cash(12345);
         assert_ne!(cash, 0);
-        assert!(nonzero_pixels(&e) > 0);
+        assert_ne!(
+            e.screen.pixels, label_only,
+            "show_cash(12345) must blit yellow digit sprites, not only 金钱"
+        );
+
+        e.screen.clear(0);
+        let _ = e.show_cash(0);
+        let cash_zero = e.screen.pixels.clone();
+        e.screen.clear(0);
+        let _ = e.show_cash(12345);
+        assert_ne!(
+            e.screen.pixels, cash_zero,
+            "show_cash must draw distinct yellow digits for 12345 vs 0"
+        );
     }
 
     #[test]
@@ -1321,10 +1387,34 @@ mod tests {
         let mut e = engine();
         e.screen.clear(0);
         e.draw_number(1234, 6, (60, 20), NumColor::Yellow, NumAlign::Right);
-        assert!(nonzero_pixels(&e) > 0);
+        let n1234 = e.screen.pixels.clone();
+        assert!(n1234.iter().any(|&p| p != 0), "yellow 1234 must blit");
+
+        e.screen.clear(0);
+        e.draw_number(0, 6, (60, 20), NumColor::Yellow, NumAlign::Right);
+        let n0 = e.screen.pixels.clone();
+        assert!(n0.iter().any(|&p| p != 0), "yellow 0 must blit");
+        assert_ne!(
+            n1234, n0,
+            "draw_number must use distinct yellow digit frames, not leftover text"
+        );
+
         e.screen.clear(0);
         e.draw_number(0, 2, (60, 20), NumColor::Cyan, NumAlign::Right);
         assert!(nonzero_pixels(&e) > 0);
+        e.screen.clear(0);
+        e.draw_number(56, 2, (60, 20), NumColor::Blue, NumAlign::Right);
+        assert!(nonzero_pixels(&e) > 0);
+
+        // Issue 26: empty gpSpriteUI leaves 金钱 (font) but no amount digits.
+        e.ui.sprite_ui.clear();
+        e.screen.clear(0);
+        e.draw_number(12345, 6, (60, 20), NumColor::Yellow, NumAlign::Right);
+        assert_eq!(
+            nonzero_pixels(&e),
+            0,
+            "draw_number must be a no-op without digit frames 19-28"
+        );
     }
 
     #[test]
