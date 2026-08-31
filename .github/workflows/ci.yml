@@ -35,3 +35,22 @@ jobs:
         run: cargo test
         env:
           PAL_DATA_DIR: ${{ github.workspace }}/pal
+
+  # Issue #21 is a Win10 MSVC link failure when two windows-core crates
+  # are pulled in (gpu-allocator on windows 0.54 next to wgpu-hal 0.62).
+  # rustfmt/clippy stay on Ubuntu; this job only compile-links and runs
+  # lib tests so the extra runner stays cheap (no walkthrough binary).
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: tests
+        run: cargo test --lib
+        env:
+          PAL_DATA_DIR: ${{ github.workspace }}/pal
